@@ -1,0 +1,163 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ~    Copyright 2023 宋昊文
+  ~
+  ~    Licensed under the Apache License, Version 2.0 (the "License");
+  ~    you may not use this file except in compliance with the License.
+  ~    You may obtain a copy of the License at
+  ~
+  ~        http://www.apache.org/licenses/LICENSE-2.0
+  ~
+  ~    Unless required by applicable law or agreed to in writing, software
+  ~    distributed under the License is distributed on an "AS IS" BASIS,
+  ~    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  ~    See the License for the specific language governing permissions and
+  ~    limitations under the License.
+  -->
+
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    tools:context="com.everfrost.rusty.rcs.client.MainActivity">
+
+    <Button
+        android:id="@+id/init"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:onClick="onClickedInit"
+        android:text="Init"
+        android:textAllCaps="false"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toTopOf="@id/connect"
+        app:layout_constraintLeft_toLeftOf="parent"
+        app:layout_constraintRight_toRightOf="parent" />
+
+    <Button
+        android:id="@+id/connect"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:onClick="onClickedConnect"
+        android:text="Connect"
+        android:textAllCaps="false"
+        app:layout_constraintTop_toBottomOf="@id/init"
+        app:layout_constraintBottom_toTopOf="@id/send_message"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toStartOf="@id/disconnect" />
+
+    <Button
+        android:id="@+id/disconnect"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:onClick="onClickedDisconnect"
+        android:text="Disconnect"
+        android:textAllCaps="false"
+        app:layout_constraintBaseline_toBaselineOf="@id/connect"
+        app:layout_constraintStart_toEndOf="@id/connect"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+    <Button
+        android:id="@+id/send_message"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:onClick="onClickedSendMessage"
+        android:text="Send Message"
+        android:textAllCaps="false"
+        app:layout_constraintTop_toBottomOf="@id/connect"
+        app:layout_constraintBottom_toTopOf="@id/upload_file"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toStartOf="@id/send_imdn" />
+
+    <Button
+        android:id="@+id/send_imdn"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:onClick="onClickedSendIMDN"
+        android:text="Send IMDN"
+        android:textAllCaps="false"
+        app:layout_constraintBaseline_toBaselineOf="@id/send_message"
+        app:layout_constraintStart_toEndOf="@id/send_message"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+    <Button
+        android:id="@+id/upload_file"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:onClick="onClickedUploadFile"
+        android:text="Upload File"
+        android:textAllCaps="false"
+        app:layout_constraintTop_toBottomOf="@id/connect"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toStartOf="@id/download_file"
+        app:layout_constraintBottom_toTopOf="@id/search"/>
+
+    <Button
+        android:id="@+id/download_file"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:onClick="onClickedDownloadFile"
+        android:text="Download File"
+        android:textAllCaps="false"
+        app:layout_constraintBaseline_toBaselineOf="@id/upload_file"
+        app:layout_constraintStart_toEndOf="@id/upload_file"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+    <EditText
+        android:id="@+id/search_text"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        app:layout_constraintBottom_toTopOf="@id/retrieve_specific_chatbots"
+        app:layout_constraintTop_toBottomOf="@id/upload_file"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toStartOf="@id/search"
+        android:hint="Input Query"
+        />
+
+    <Button
+        android:id="@+id/search"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:onClick="onClickedSearch"
+        android:text="Search"
+        android:textAllCaps="false"
+        app:layout_constraintBaseline_toBaselineOf="@id/search_text"
+        app:layout_constraintStart_toEndOf="@id/search_text"
+        app:layout_constraintEnd_toEndOf="parent"/>
+
+    <Button
+        android:id="@+id/retrieve_specific_chatbots"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:onClick="onClickedRetrieveSpecificChatbots"
+        android:text="Retrieve Specific Chatbots"
+        android:textAllCaps="false"
+        app:layout_constraintTop_toBottomOf="@id/search"
+        app:layout_constraintBottom_toTopOf="@id/destroy"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toStartOf="@id/retrieve_chatbot_info" />
+
+    <Button
+        android:id="@+id/retrieve_chatbot_info"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:onClick="onClickedRetrieveChatbotInfo"
+        android:text="Retrieve Chatbot Info"
+        android:textAllCaps="false"
+        app:layout_constraintBaseline_toBaselineOf="@id/retrieve_specific_chatbots"
+        app:layout_constraintStart_toEndOf="@id/retrieve_specific_chatbots"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+    <Button
+        android:id="@+id/destroy"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:onClick="onClickedDestroy"
+        android:text="Destroy"
+        android:textAllCaps="false"
+        app:layout_constraintTop_toBottomOf="@id/retrieve_specific_chatbots"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+</androidx.constraintlayout.widget.ConstraintLayout>

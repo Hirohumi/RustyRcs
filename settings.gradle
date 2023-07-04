@@ -1,0 +1,28 @@
+pluginManagement {
+    repositories {
+        gradlePluginPortal()
+        google()
+        mavenCentral()
+        jcenter() {
+            content {
+                includeModule("org.webrtc", "google-webrtc")
+                includeModule("com.getkeepsafe.relinker", "relinker")
+            }
+        }
+    }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+        jcenter() {
+            content {
+                includeModule("org.webrtc", "google-webrtc")
+                includeModule("com.getkeepsafe.relinker", "relinker")
+            }
+        }
+    }
+}
+rootProject.name = "RustyRcs"
+include ':app'
