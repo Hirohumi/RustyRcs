@@ -202,7 +202,7 @@ public class MainActivity extends AppCompatActivity {
                         Log.w(TAG, "e:", e);
                     }
 
-                } catch (IOException e) {
+                } catch (IOException ignored) {
 
                 }
 
@@ -234,7 +234,6 @@ public class MainActivity extends AppCompatActivity {
                         lastReceivedMessageImdnId = messageId;
                         lastReceivedMessageDateTime = date;
                     }
-
 
                     @Override
                     public void onMultiConferenceV1Invite(long nativeHandle, byte[] offerSdp, long responseReceiverHandle) {

@@ -153,8 +153,10 @@ public class ApplicationEnvironment extends Application {
         ConnectivityManager connectivityManager = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
         if (connectivityManager != null) {
             LinkProperties linkProperties = connectivityManager.getLinkProperties(network);
-            List<InetAddress> dnsServers = linkProperties.getDnsServers();
-            return new DnsInfo(dnsServers);
+            if (linkProperties != null) {
+                List<InetAddress> dnsServers = linkProperties.getDnsServers();
+                return new DnsInfo(dnsServers);
+            }
         }
 
         return null;

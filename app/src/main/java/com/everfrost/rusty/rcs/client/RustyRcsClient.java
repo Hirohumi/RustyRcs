@@ -126,7 +126,7 @@ public class RustyRcsClient {
 
     static native void searchChatbot(long nativeHandle, String query, SearchChatbotResultCallback callback);
 
-    public interface RetrieveChatbotInfoResultCallback{
+    public interface RetrieveChatbotInfoResultCallback {
         void onResult(int statusCode, String reasonPhrase, String chatbotInfo, String responseETag, int expiry);
     }
 
