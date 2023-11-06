@@ -296,7 +296,7 @@ public class MainActivity extends AppCompatActivity {
 
         String toMsisdn = getResources().getString(R.string.to_msisdn);
 
-        RustyRcsClient.sendMessage(nativeClient, "text/plain", "Hello, World!", "tel:" + toMsisdn, false, (statusCode, reasonPhrase) -> Log.d(TAG, "RustyRcsClient.sendMessage()->onResult: " + statusCode + " " + reasonPhrase));
+        RustyRcsClient.sendMessage(nativeClient, "text/plain", "Hello, World!", "tel:" + toMsisdn, RustyRcsClient.RECIPIENT_TYPE_CONTACT, (statusCode, reasonPhrase) -> Log.d(TAG, "RustyRcsClient.sendMessage()->onResult: " + statusCode + " " + reasonPhrase));
     }
 
     private String lastReceivedMessageImdnId;
@@ -402,7 +402,7 @@ public class MainActivity extends AppCompatActivity {
                     if (fileUploadTid == null) {
                         fileUploadTid = UUID.randomUUID().toString();
                     }
-                    RustyRcsClient.uploadFile(nativeClient, fileUploadTid, filePath, "image/png", null, thumbPath, "image/png", null, (statusCode, reasonPhrase, resultXml) -> {
+                    RustyRcsClient.uploadFile(nativeClient, fileUploadTid, filePath, "a.jpeg", "image/png", null, thumbPath, "b.jpeg", "image/png", null, (statusCode, reasonPhrase, resultXml) -> {
                         Log.i(TAG, "RustyRcsClient.uploadFile()->onResult: " + statusCode + " " + reasonPhrase);
                         Log.i(TAG, "resultXml: " + resultXml);
                         runOnUiThread(() -> {

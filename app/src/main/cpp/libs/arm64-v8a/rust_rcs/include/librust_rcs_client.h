@@ -1,3 +1,19 @@
+/*
+ * Copyright 2023 宋昊文
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #include <stddef.h>
 #include <stdint.h>
 
@@ -24,9 +40,9 @@ void state_change_callback_context_release(void *context);
 #define rcs_message_service_deferred_one_to_one 2
 
 typedef void (*message_callback) (int service_type, struct rcs_messaging_session *session,
-                                  const char *contact_uri, const char *content_type, const char *content_body,
-                                  const char *imdn_message_id, const char *cpim_date, const char *cpim_from,
-                                  void *context);
+                                const char *contact_uri, const char *content_type, const char *content_body,
+                                const char *imdn_message_id, const char *cpim_date, const char *cpim_from,
+                                void *context);
 
 void message_callback_context_release(void *context);
 
@@ -73,34 +89,39 @@ typedef void (*message_result_callback) (uint16_t status_code, const char *reaso
 
 void message_result_callback_context_release(void *context);
 
+#define recipient_type_contact 0
+#define recipient_type_chatbot 1
+#define recipient_type_group 2
+#define recipient_type_resource_list 3
+
 extern void rcs_client_send_message(struct rcs_runtime *runtime, struct rcs_client *client, const char *message_type, const char *message_content, const char *recipient,
-                                    bool recipient_is_chatbot,
-                                    message_result_callback cb, void *context);
+                                int8_t recipient_type,
+                                message_result_callback cb, void *context);
 
 typedef void (*send_imdn_report_result_callback) (uint16_t status_code, const char *reason_phrase, void *context);
 
 void send_imdn_report_result_callback_context_release(void *context);
 
 extern void rcs_client_send_imdn_report(struct rcs_runtime *runtime, struct rcs_client *client,
-                                        const char *imdn_content, const char *sender_uri, int sender_service_type, struct rcs_messaging_session *session,
-                                        send_imdn_report_result_callback callback, void *context);
+                                const char *imdn_content, const char *sender_uri, int sender_service_type, struct rcs_messaging_session *session,
+                                send_imdn_report_result_callback callback, void *context);
 
 typedef void (*upload_file_result_callback) (uint16_t status_code, const char *reason_phrase, const char *result_xml, void *context);
 
 void upload_file_result_callback_context_release(void *context);
 
 extern void rcs_client_upload_file(struct rcs_runtime *runtime, struct rcs_client *client, const char *tid,
-                                   const char *file_path, const char *file_mime, const char *file_hash,
-                                   const char *thumbnail_path, const char *thumbnail_mime, const char *thumbnail_hash,
-                                   upload_file_result_callback cb, void *context);
+                                const char *file_path, const char *file_name, const char *file_mime, const char *file_hash,
+                                const char *thumbnail_path, const char *thumbnail_name, const char *thumbnail_mime, const char *thumbnail_hash,
+                                upload_file_result_callback cb, void *context);
 
 typedef void (*download_file_result_callback) (uint16_t status_code, const char *reason_phrase, void *context);
 
 void download_file_result_callback_context_release(void *context);
 
 extern void rcs_client_download_file(struct rcs_runtime *runtime, struct rcs_client *client,
-                                     const char *file_uri, const char *download_path, size_t start, size_t total,
-                                     download_file_result_callback cb, void *context);
+                                const char *file_uri, const char *download_path, uint32_t start, int32_t total,
+                                download_file_result_callback cb, void *context);
 
 extern void destroy_rcs_messaging_session(struct rcs_messaging_session *session);
 

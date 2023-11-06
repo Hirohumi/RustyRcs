@@ -19,7 +19,7 @@ struct rcs_client_handle {
 };
 
 struct rcs_messaging_session_handle {
-    struct rcs_messaging_session* session;
+    struct rcs_messaging_session *session;
 };
 
 struct rcs_multi_conference_v1_handle {
@@ -80,6 +80,10 @@ struct search_chatbot_result_callback_context {
 
 struct retrieve_chatbot_info_result_callback_context {
     jobject obj;
+};
+
+struct socket_event_receiver_handle {
+    struct socket_event_receiver *receiver;
 };
 
 static JavaVM *javaVm = nullptr;
@@ -153,7 +157,7 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *jvm, void *reserved)
     auto_config_progress_callback_method_id = env->GetMethodID(config_listener, "onProgress", "(I)V");
 
     auto_config_result_callback_method_id = env->GetMethodID(config_listener, "onResult",
-                                                      "(ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;)V");
+                                                             "(ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;)V");
 
     jclass send_message_listener_interface_class = env->FindClass("com/everfrost/rusty/rcs/client/RustyRcsClient$SendMessageListener");
 
@@ -359,7 +363,7 @@ static void multi_conference_v1_invite_handler_function_impl(struct rcs_multi_co
 
                 env->SetByteArrayRegion(offerSdp, 0, offer_sdp_len,
                                         reinterpret_cast<const jbyte *>(offer_sdp));
-                
+
                 auto *receiverHandle = static_cast<struct multi_conference_v1_invite_response_receiver_handle *>(calloc(1, sizeof (struct multi_conference_v1_invite_response_receiver_handle)));
 
                 receiverHandle->receiver = response_receiver;
@@ -750,9 +754,9 @@ static void retrieve_chatbot_info_result_callback_impl(uint16_t status_code,cons
 extern "C"
 JNIEXPORT jlong JNICALL
 Java_com_everfrost_rusty_rcs_client_RustyRcsClient_createRcsClient(JNIEnv *env, __attribute__((unused)) jclass clazz,
-                                                                       jint subId, jint mcc, jint mnc,
-                                                                       jstring imsi, jstring imei, jstring msisdn, jstring dir,
-                                                                       jobject listener) {
+                                                                   jint subId, jint mcc, jint mnc,
+                                                                   jstring imsi, jstring imei, jstring msisdn, jstring dir,
+                                                                   jobject listener) {
     auto *stateChangeCallbackContext = static_cast<struct state_change_callback_context *>(calloc(1, sizeof(struct state_change_callback_context)));
 
     __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, "created stateChangeCallbackContext %p\n", stateChangeCallbackContext);
@@ -784,9 +788,9 @@ Java_com_everfrost_rusty_rcs_client_RustyRcsClient_createRcsClient(JNIEnv *env, 
     const char *utf_dir = env->GetStringUTFChars(dir, nullptr);
 
     struct rcs_client *client = new_rcs_client(runtime, subId, mcc, mnc, utf_imsi, utf_imei, utf_msisdn, utf_dir,
-            state_change_callback_impl, reinterpret_cast<void *>(stateChangeCallbackContext),
-            message_callback_impl, reinterpret_cast<void *>(messageCallbackContext),
-            multi_conference_v1_invite_handler_function_impl, reinterpret_cast<void *>(multiConferenceV1InviteHandlerContext));
+                                               state_change_callback_impl, reinterpret_cast<void *>(stateChangeCallbackContext),
+                                               message_callback_impl, reinterpret_cast<void *>(messageCallbackContext),
+                                               multi_conference_v1_invite_handler_function_impl, reinterpret_cast<void *>(multiConferenceV1InviteHandlerContext));
 //    struct rcs_client *client = new_rcs_client(state_change_callback_impl, reinterpret_cast<void *>(callbackContext));
 
     env->ReleaseStringUTFChars(imsi, utf_imsi);
@@ -808,8 +812,8 @@ Java_com_everfrost_rusty_rcs_client_RustyRcsClient_createRcsClient(JNIEnv *env, 
 extern "C"
 JNIEXPORT void JNICALL
 Java_com_everfrost_rusty_rcs_client_RustyRcsClient_startConfig(JNIEnv *env, jclass clazz,
-                                                                   jlong native_handle,
-                                                                   jobject listener) {
+                                                               jlong native_handle,
+                                                               jobject listener) {
 
     auto *callbackContext = static_cast<struct auto_config_callback_context *>(calloc(1, sizeof(struct auto_config_callback_context)));
 
@@ -838,9 +842,9 @@ Java_com_everfrost_rusty_rcs_client_RustyRcsClient_inputOtp(JNIEnv *env, jclass 
 extern "C"
 JNIEXPORT void JNICALL
 Java_com_everfrost_rusty_rcs_client_RustyRcsClient_setup(JNIEnv *env, jclass clazz,
-                                                             jlong native_handle,
-                                                             jstring ims_config,
-                                                             jstring rcs_config) {
+                                                         jlong native_handle,
+                                                         jstring ims_config,
+                                                         jstring rcs_config) {
 
     auto *nativeHandle = reinterpret_cast<struct rcs_client_handle *>(native_handle);
     if (nativeHandle) {
@@ -868,7 +872,7 @@ Java_com_everfrost_rusty_rcs_client_RustyRcsClient_connect(__attribute__((unused
 extern "C"
 JNIEXPORT void JNICALL
 Java_com_everfrost_rusty_rcs_client_RustyRcsClient_disconnect(__attribute__((unused)) JNIEnv *env, __attribute__((unused)) jclass clazz,
-                                                           jlong native_handle) {
+                                                              jlong native_handle) {
     auto *nativeHandle = reinterpret_cast<struct rcs_client_handle *>(native_handle);
     if (nativeHandle) {
         rcs_client_disconnect(runtime, nativeHandle->client);
@@ -878,10 +882,10 @@ Java_com_everfrost_rusty_rcs_client_RustyRcsClient_disconnect(__attribute__((unu
 extern "C"
 JNIEXPORT void JNICALL
 Java_com_everfrost_rusty_rcs_client_RustyRcsClient_sendMessage(JNIEnv *env, jclass clazz,
-                                                                   jlong native_handle,
-                                                                   jstring message_type, jstring message_content,
-                                                                   jstring recipient, jboolean recipient_is_chatbot,
-                                                                   jobject listener) {
+                                                               jlong native_handle,
+                                                               jstring message_type, jstring message_content,
+                                                               jstring recipient, jint recipient_type,
+                                                               jobject listener) {
 
     auto *callbackContext = static_cast<struct message_result_callback_context *>(calloc(1, sizeof(struct message_result_callback_context)));
 
@@ -893,7 +897,7 @@ Java_com_everfrost_rusty_rcs_client_RustyRcsClient_sendMessage(JNIEnv *env, jcla
         const char *message_content_string = env->GetStringUTFChars(message_content, nullptr);
         const char *recipient_string = env->GetStringUTFChars(recipient, nullptr);
 
-        rcs_client_send_message(runtime, nativeHandle->client, message_type_string, message_content_string, recipient_string, recipient_is_chatbot, message_result_callback_impl, callbackContext);
+        rcs_client_send_message(runtime, nativeHandle->client, message_type_string, message_content_string, recipient_string, recipient_type, message_result_callback_impl, callbackContext);
 
         env->ReleaseStringUTFChars(message_type, message_type_string);
         env->ReleaseStringUTFChars(message_content, message_content_string);
@@ -934,9 +938,12 @@ JNIEXPORT void JNICALL
 Java_com_everfrost_rusty_rcs_client_RustyRcsClient_uploadFile(JNIEnv *env, jclass clazz,
                                                               jlong native_handle,
                                                               jstring tid,
-                                                              jstring file_path, jstring file_mime,
+                                                              jstring file_path,
+                                                              jstring file_name,
+                                                              jstring file_mime,
                                                               jstring file_hash,
                                                               jstring thumbnail_path,
+                                                              jstring thumbnail_name,
                                                               jstring thumbnail_mime,
                                                               jstring thumbnail_hash,
                                                               jobject callback) {
@@ -949,6 +956,7 @@ Java_com_everfrost_rusty_rcs_client_RustyRcsClient_uploadFile(JNIEnv *env, jclas
     if (nativeHandle) {
         const char *tid_utf8 = env->GetStringUTFChars(tid, nullptr);
         const char *file_path_utf8 = env->GetStringUTFChars(file_path, nullptr);
+        const char *file_name_utf8 = env->GetStringUTFChars(file_name, nullptr);
         const char *file_mime_utf8 = env->GetStringUTFChars(file_mime, nullptr);
         const char *file_hash_utf8 = nullptr;
         if (file_hash != nullptr) {
@@ -956,11 +964,15 @@ Java_com_everfrost_rusty_rcs_client_RustyRcsClient_uploadFile(JNIEnv *env, jclas
         }
 
         const char *thumbnail_path_utf8 = nullptr;
+        const char *thumbnail_name_utf8 = nullptr;
         const char *thumbnail_mime_utf8 = nullptr;
         const char *thumbnail_hash_utf8 = nullptr;
 
         if (thumbnail_path != nullptr) {
             thumbnail_path_utf8 = env->GetStringUTFChars(thumbnail_path, nullptr);
+        }
+        if (thumbnail_name != nullptr) {
+            thumbnail_name_utf8 = env->GetStringUTFChars(thumbnail_name, nullptr);
         }
         if (thumbnail_mime != nullptr) {
             thumbnail_mime_utf8 = env->GetStringUTFChars(thumbnail_mime, nullptr);
@@ -970,12 +982,13 @@ Java_com_everfrost_rusty_rcs_client_RustyRcsClient_uploadFile(JNIEnv *env, jclas
         }
 
         rcs_client_upload_file(runtime, nativeHandle->client, tid_utf8,
-                               file_path_utf8, file_mime_utf8, file_hash_utf8,
-                               thumbnail_path_utf8, thumbnail_mime_utf8, thumbnail_hash_utf8,
+                               file_path_utf8, file_name_utf8, file_mime_utf8, file_hash_utf8,
+                               thumbnail_path_utf8, thumbnail_name_utf8, thumbnail_mime_utf8, thumbnail_hash_utf8,
                                upload_file_result_callback_impl, callbackContext);
 
         env->ReleaseStringUTFChars(tid, tid_utf8);
         env->ReleaseStringUTFChars(file_path, file_path_utf8);
+        env->ReleaseStringUTFChars(file_name, file_name_utf8);
         env->ReleaseStringUTFChars(file_mime, file_mime_utf8);
         if (file_hash_utf8 != nullptr) {
             env->ReleaseStringUTFChars(file_hash, file_hash_utf8);
@@ -983,6 +996,9 @@ Java_com_everfrost_rusty_rcs_client_RustyRcsClient_uploadFile(JNIEnv *env, jclas
 
         if (thumbnail_path_utf8 != nullptr) {
             env->ReleaseStringUTFChars(thumbnail_path, thumbnail_path_utf8);
+        }
+        if (thumbnail_name_utf8 != nullptr) {
+            env->ReleaseStringUTFChars(thumbnail_name, thumbnail_name_utf8);
         }
         if (thumbnail_mime_utf8 != nullptr) {
             env->ReleaseStringUTFChars(thumbnail_mime, thumbnail_mime_utf8);
@@ -1035,12 +1051,12 @@ Java_com_everfrost_rusty_rcs_client_RustyRcsClient_00024MessagingSession_destroy
 extern "C"
 JNIEXPORT void JNICALL
 Java_com_everfrost_rusty_rcs_client_RustyRcsClient_createMultiConferenceV1(JNIEnv *env,
-                                                                               jclass clazz,
-                                                                               jlong native_handle,
-                                                                               jstring recipients,
-                                                                               jstring offer_sdp,
-                                                                               jobject event_listener,
-                                                                               jobject callback) {
+                                                                           jclass clazz,
+                                                                           jlong native_handle,
+                                                                           jstring recipients,
+                                                                           jstring offer_sdp,
+                                                                           jobject event_listener,
+                                                                           jobject callback) {
     auto *nativeHandle = reinterpret_cast<struct rcs_client_handle *>(native_handle);
     if (nativeHandle) {
 
@@ -1211,7 +1227,7 @@ Java_com_everfrost_rusty_rcs_client_RustyRcsClient_retrieveChatbotInfo(JNIEnv *e
 extern "C"
 JNIEXPORT void JNICALL
 Java_com_everfrost_rusty_rcs_client_RustyRcsClient_destroy(__attribute__((unused)) JNIEnv *env, __attribute__((unused)) jclass clazz,
-                                                               jlong native_handle) {
+                                                           jlong native_handle) {
     auto *nativeHandle = reinterpret_cast<struct rcs_client_handle *>(native_handle);
     if (nativeHandle) {
         destroy_rcs_client(nativeHandle->client);
@@ -1219,11 +1235,135 @@ Java_com_everfrost_rusty_rcs_client_RustyRcsClient_destroy(__attribute__((unused
     }
 }
 
+static volatile jobject host_environment = nullptr;
+
+static jmethodID debug_log_method_id = nullptr;
+
+static jmethodID network_request_factory_constructor_method_id = nullptr;
+
+static jmethodID network_request_release_method_id = nullptr;
+
+static jmethodID active_network_factory_constructor_method_id = nullptr;
+
+static jmethodID active_network_get_type_method_id = nullptr;
+
+static jmethodID active_network_get_dns_info_method_id = nullptr;
+
+static jmethodID dns_info_get_server_address_method_id = nullptr;
+
+static jmethodID create_socket_method_id = nullptr;
+
+static jmethodID socket_connect_method_id = nullptr;
+
+static jmethodID socket_finish_connect_method_id = nullptr;
+
+static jmethodID socket_start_handshake_method_id = nullptr;
+
+static jmethodID socket_finish_handshake_method_id = nullptr;
+
+static jmethodID read_socket_method_id = nullptr;
+
+static jmethodID write_socket_method_id = nullptr;
+
+static jmethodID close_socket_method_id = nullptr;
+
+static jmethodID get_socket_info_method_id = nullptr;
+
+static jmethodID get_socket_session_cipher_suite_method_id = nullptr;
+
+static jfieldID socket_info_af_field_id = nullptr;
+
+static jfieldID socket_info_l_addr_field_id = nullptr;
+
+static jfieldID socket_info_l_port_field_id = nullptr;
+
+static jfieldID cipher_suite_yy_field_id = nullptr;
+
+static jfieldID cipher_suite_zz_field_id = nullptr;
+
+static jmethodID getIccAuthentication_method_id = nullptr;
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_everfrost_rusty_rcs_client_ApplicationEnvironment_registerHostEnvironment(JNIEnv *env,
+                                                                                   jclass clazz,
+                                                                                   jobject factory) {
+    host_environment = env->NewGlobalRef(factory);
+
+    debug_log_method_id = env->GetStaticMethodID(clazz, "debugLog", "(Ljava/lang/String;Ljava/lang/String;)V");
+
+    network_request_factory_constructor_method_id = env->GetMethodID(clazz, "createNetworkRequest",
+                                                                     "(J)Lcom/everfrost/rusty/rcs/client/ApplicationEnvironment$CellularNetworkRequest;");
+
+    jclass networkRequestClass = env->FindClass("com/everfrost/rusty/rcs/client/ApplicationEnvironment$CellularNetworkRequest");
+
+    network_request_release_method_id = env->GetMethodID(networkRequestClass, "release", "()V");
+
+    active_network_factory_constructor_method_id = env->GetMethodID(clazz, "getCurrentActiveNetwork", "()Landroid/net/Network;");
+
+    active_network_get_type_method_id = env->GetMethodID(clazz, "getNetworkType", "(Landroid/net/Network;)I");
+
+    active_network_get_dns_info_method_id = env->GetMethodID(clazz, "getDnsInfoFromNetwork",
+                                                             "(Landroid/net/Network;)Lcom/everfrost/rusty/rcs/client/ApplicationEnvironment$DnsInfo;");
+
+    jclass dnsInfoClass = env->FindClass("com/everfrost/rusty/rcs/client/ApplicationEnvironment$DnsInfo");
+
+    dns_info_get_server_address_method_id = env->GetMethodID(dnsInfoClass, "getNextServerAddress", "()Ljava/lang/String;");
+
+    create_socket_method_id = env->GetMethodID(clazz, "createSocket",
+                                               "(JZLjava/lang/String;)Lcom/everfrost/rusty/rcs/client/ApplicationEnvironment$AsyncSocket;");
+
+    jclass socketClass = env->FindClass("com/everfrost/rusty/rcs/client/ApplicationEnvironment$AsyncSocket");
+
+    socket_connect_method_id = env->GetMethodID(socketClass, "connect", "(Ljava/lang/String;I)I");
+
+    socket_finish_connect_method_id = env->GetMethodID(socketClass, "finishConnect", "()I");
+
+    socket_start_handshake_method_id = env->GetMethodID(socketClass, "startHandshake", "()I");
+
+    socket_finish_handshake_method_id = env->GetMethodID(socketClass, "finishHandshake", "()I");
+
+    read_socket_method_id = env->GetMethodID(socketClass, "read", "([B)I");
+
+    write_socket_method_id = env->GetMethodID(socketClass, "write", "([B)I");
+
+    close_socket_method_id = env->GetMethodID(socketClass, "close", "()I");
+
+    get_socket_info_method_id = env->GetMethodID(socketClass, "getSocketInfo",
+                                                 "()Lcom/everfrost/rusty/rcs/client/ApplicationEnvironment$AsyncSocket$SocketInfo;");
+
+    get_socket_session_cipher_suite_method_id = env->GetMethodID(socketClass, "getSessionCipherSuite", "()Lcom/everfrost/rusty/rcs/client/ApplicationEnvironment$CipherSuiteCoding;");
+
+    jclass socketInfoClass = env->FindClass("com/everfrost/rusty/rcs/client/ApplicationEnvironment$AsyncSocket$SocketInfo");
+
+    socket_info_af_field_id = env->GetFieldID(socketInfoClass, "af", "I");
+
+    socket_info_l_addr_field_id = env->GetFieldID(socketInfoClass, "lAddr", "Ljava/lang/String;");
+
+    socket_info_l_port_field_id = env->GetFieldID(socketInfoClass, "lPort", "I");
+
+    jclass cipherSuiteCodingClass = env->FindClass("com/everfrost/rusty/rcs/client/ApplicationEnvironment$CipherSuiteCoding");
+
+    cipher_suite_yy_field_id = env->GetFieldID(cipherSuiteCodingClass, "yy", "B");
+    cipher_suite_zz_field_id = env->GetFieldID(cipherSuiteCodingClass, "zz", "B");
+
+    getIccAuthentication_method_id = env->GetMethodID(clazz, "getIccAuthentication", "([BI)[B");
+}
+
+
 #pragma mark - Platform
 
 void platform_log_impl(const char *tag, const char *message)
 {
-    __android_log_print(ANDROID_LOG_DEBUG, tag, "%s", message);
+    JNIEnv *env = ensure_jni_env();
+    if (env) {
+        jclass clazz = env->GetObjectClass(host_environment);
+
+        jstring t = env->NewStringUTF(tag);
+        jstring m = env->NewStringUTF(message);
+
+        env->CallStaticVoidMethod(clazz, debug_log_method_id, t, m);
+    }
 }
 
 int platform_icc_open_channel(void *aid_bytes, size_t aid_size)
@@ -1241,47 +1381,6 @@ void platform_icc_close_channel(int channel)
 
 }
 
-static jobject host_environment = nullptr;
-
-static jmethodID network_request_factory_constructor_method_id = nullptr;
-
-static jmethodID network_request_release_method_id = nullptr;
-
-static jmethodID active_network_factory_constructor_method_id = nullptr;
-
-static jmethodID active_network_get_type_method_id = nullptr;
-
-static jmethodID active_network_get_dns_info_method_id = nullptr;
-
-static jmethodID dns_info_get_server_address_method_id = nullptr;
-
-static jmethodID getIccAuthentication_method_id = nullptr;
-
-extern "C"
-JNIEXPORT void JNICALL
-Java_com_everfrost_rusty_rcs_client_ApplicationEnvironment_registerHostEnvironment(JNIEnv *env,
-                                                                                       jclass clazz,
-                                                                                       jobject factory) {
-    host_environment = env->NewGlobalRef(factory);
-
-    network_request_factory_constructor_method_id = env->GetMethodID(clazz, "createNetworkRequest", "(J)Lcom/everfrost/rusty/rcs/client/ApplicationEnvironment$CellularNetworkRequest;");
-
-    jclass networkRequestClass = env->FindClass("com/everfrost/rusty/rcs/client/ApplicationEnvironment$CellularNetworkRequest");
-
-    network_request_release_method_id = env->GetMethodID(networkRequestClass, "release", "()V");
-
-    active_network_factory_constructor_method_id = env->GetMethodID(clazz, "getCurrentActiveNetwork", "()Landroid/net/Network;");
-
-    active_network_get_type_method_id = env->GetMethodID(clazz, "getNetworkType", "(Landroid/net/Network;)I");
-
-    active_network_get_dns_info_method_id = env->GetMethodID(clazz, "getDnsInfoFromNetwork", "(Landroid/net/Network;)Lcom/everfrost/rusty/rcs/client/ApplicationEnvironment$DnsInfo;");
-
-    jclass dnsInfoClass = env->FindClass("com/everfrost/rusty/rcs/client/ApplicationEnvironment$DnsInfo");
-
-    dns_info_get_server_address_method_id = env->GetMethodID(dnsInfoClass, "getNextServerAddress", "()Ljava/lang/String;");
-
-    getIccAuthentication_method_id = env->GetMethodID(clazz, "getIccAuthentication", "([BI)[B");
-}
 
 struct network_request {
     jobject obj;
@@ -1371,12 +1470,12 @@ struct dns_info {
 struct dns_info *platform_get_network_dns_info(struct network_info *c_handle) {
     JNIEnv *env = ensure_jni_env();
     if (env) {
-       jobject r = env->CallObjectMethod(host_environment, active_network_get_dns_info_method_id, c_handle->obj);
-       if (r) {
-           auto dnsInfo = static_cast<struct dns_info *>(calloc(1, sizeof (struct dns_info)));
-           dnsInfo->obj = env->NewGlobalRef(r);
-           return dnsInfo;
-       }
+        jobject r = env->CallObjectMethod(host_environment, active_network_get_dns_info_method_id, c_handle->obj);
+        if (r) {
+            auto dnsInfo = static_cast<struct dns_info *>(calloc(1, sizeof (struct dns_info)));
+            dnsInfo->obj = env->NewGlobalRef(r);
+            return dnsInfo;
+        }
     }
 
     return nullptr;
@@ -1452,6 +1551,275 @@ int platform_pton(int af, const char *network_address, struct sockaddr_storage *
     return inet_pton(af, network_address, c_struct);
 }
 
+struct platform_socket {
+    jobject obj;
+};
+
+struct platform_socket *platform_create_socket(struct socket_event_receiver *receiver, bool use_tls, const char *host_name) {
+
+    JNIEnv *env = ensure_jni_env();
+    if (env) {
+
+        auto *receiverHandle = static_cast<struct socket_event_receiver_handle *>(calloc(1, sizeof (struct socket_event_receiver_handle)));
+
+        receiverHandle->receiver = receiver;
+
+        jstring hostName = env->NewStringUTF(host_name);
+
+        jobject r = env->CallObjectMethod(host_environment, create_socket_method_id, reinterpret_cast<jlong>(receiverHandle), use_tls, hostName);
+
+        if (r) {
+            auto *handle = static_cast<platform_socket *>(calloc(1, sizeof(struct platform_socket)));
+
+            handle->obj = env->NewGlobalRef(r);
+
+            return handle;
+        }
+    }
+
+    return nullptr;
+}
+
+int platform_socket_connect(struct platform_socket *sock, const char *r_addr, u_int16_t r_port) {
+
+    JNIEnv *env = ensure_jni_env();
+    if (env) {
+
+        jstring rAddr = env->NewStringUTF(r_addr);
+
+        return env->CallIntMethod(sock->obj, socket_connect_method_id, rAddr, r_port);
+    }
+
+    return -1;
+}
+
+int platform_socket_finish_connect(struct platform_socket *sock) {
+
+    JNIEnv *env = ensure_jni_env();
+    if (env) {
+        int r = env->CallIntMethod(sock->obj, socket_finish_connect_method_id);
+        if (r == 114) {
+            return EALREADY;
+        }
+        return r;
+    }
+
+    return -1;
+}
+
+int platform_socket_start_handshake(struct platform_socket *sock) {
+
+    JNIEnv *env = ensure_jni_env();
+    if (env) {
+        return env->CallIntMethod(sock->obj, socket_start_handshake_method_id);
+    }
+
+    return -1;
+}
+
+int platform_socket_finish_handshake(struct platform_socket *sock) {
+
+    JNIEnv *env = ensure_jni_env();
+    if (env) {
+        int r = env->CallIntMethod(sock->obj, socket_finish_handshake_method_id);
+        if (r == 114) {
+            return EALREADY;
+        }
+        return r;
+    }
+
+    return -1;
+}
+
+int platform_read_socket(struct platform_socket *sock, void *buffer, size_t buffer_len, size_t *bytes_read) {
+
+    JNIEnv *env = ensure_jni_env();
+    if (env) {
+
+        jbyteArray jBuffer = env->NewByteArray(buffer_len);
+
+        jint ret = env->CallIntMethod(sock->obj, read_socket_method_id, jBuffer);
+
+        if (ret > 0) {
+            env->GetByteArrayRegion(jBuffer, 0, ret, reinterpret_cast<jbyte *>(buffer));
+            *bytes_read = ret;
+            return 0;
+        }
+
+        if (ret == 0) {
+            return EAGAIN;
+        } else {
+            return ECONNRESET;
+        }
+    }
+
+    return ENOTSUP;
+}
+
+int platform_write_socket(struct platform_socket *sock, void *buffer, size_t buffer_len, size_t *bytes_written) {
+
+    JNIEnv *env = ensure_jni_env();
+    if (env) {
+
+        jbyteArray bytes = env->NewByteArray(buffer_len);
+
+        env->SetByteArrayRegion(bytes, 0, buffer_len, reinterpret_cast<const jbyte *>(buffer));
+
+        int r = env->CallIntMethod(sock->obj, write_socket_method_id, bytes);
+
+        if (r > 0) {
+            *bytes_written = r;
+            return 0;
+        }
+
+        if (r == 0) {
+            return EAGAIN;
+        } else {
+            return ECONNRESET;
+        }
+    }
+
+    return ENOTSUP;
+}
+
+void platform_close_socket(struct platform_socket *sock) {
+
+    JNIEnv *env = ensure_jni_env();
+    if (env) {
+
+        int r = env->CallIntMethod(sock->obj, close_socket_method_id);
+    }
+}
+
+void platform_free_socket(struct platform_socket *sock) {
+
+    JNIEnv *env = ensure_jni_env();
+    if (env) {
+        env->DeleteGlobalRef(sock->obj);
+        free(sock);
+    }
+}
+
+struct platform_socket_info {
+    jobject obj;
+};
+
+struct platform_socket_info *platform_get_socket_info(struct platform_socket *sock) {
+
+    JNIEnv *env = ensure_jni_env();
+    if (env) {
+        jobject r = env->CallObjectMethod(sock->obj, get_socket_info_method_id);
+        if (r) {
+            auto socketInfo = static_cast<struct platform_socket_info *>(calloc(1, sizeof (struct platform_socket_info)));
+            socketInfo->obj = env->NewGlobalRef(r);
+            return socketInfo;
+        }
+    }
+
+    return nullptr;
+}
+
+int platform_get_socket_af(struct platform_socket_info *sock_info) {
+
+    JNIEnv *env = ensure_jni_env();
+    if (env) {
+        return env->GetIntField(sock_info->obj, socket_info_af_field_id);
+    }
+
+    return 0;
+}
+
+const char *platform_get_socket_l_addr(struct platform_socket_info *sock_info) {
+
+    JNIEnv *env = ensure_jni_env();
+    if (env) {
+        jobject lAddr = env->GetObjectField(sock_info->obj, socket_info_l_addr_field_id);
+
+        if (lAddr) {
+            auto lAddrString = (jstring) lAddr;
+
+            jsize address_length = env->GetStringUTFLength(lAddrString);
+            const char *address_string = env->GetStringUTFChars(lAddrString, nullptr);
+
+            char *copied = static_cast<char *>(calloc(address_length + 1, sizeof(char)));
+            memcpy(copied, address_string, address_length);
+
+            env->ReleaseStringUTFChars(lAddrString, address_string);
+
+            return copied;
+        }
+    }
+
+    return nullptr;
+}
+
+uint16_t platform_get_socket_l_port(struct platform_socket_info *sock_info) {
+
+    JNIEnv *env = ensure_jni_env();
+    if (env) {
+        return env->GetIntField(sock_info->obj, socket_info_l_port_field_id);
+    }
+
+    return 0;
+}
+
+void platform_free_socket_info(struct platform_socket_info *sock_info) {
+    JNIEnv *env = ensure_jni_env();
+    if (env) {
+        env->DeleteGlobalRef(sock_info->obj);
+        free(sock_info);
+    }
+}
+
+struct platform_cipher_suite {
+    jobject obj;
+};
+
+struct platform_cipher_suite *platform_get_socket_session_cipher_suite(struct platform_socket *sock) {
+
+    JNIEnv *env = ensure_jni_env();
+    if (env) {
+        jobject r = env->CallObjectMethod(sock->obj, get_socket_session_cipher_suite_method_id);
+        if (r) {
+            auto socketInfo = static_cast<struct platform_cipher_suite *>(calloc(1, sizeof (struct platform_cipher_suite)));
+            socketInfo->obj = env->NewGlobalRef(r);
+            return socketInfo;
+        }
+    }
+
+    return nullptr;
+}
+
+uint8_t platform_cipher_suite_get_yy(struct platform_cipher_suite *cipher_suite) {
+
+    JNIEnv *env = ensure_jni_env();
+    if (env) {
+        jbyte yy = env->GetByteField(cipher_suite->obj, cipher_suite_yy_field_id);
+        return ((int) yy) & 0xFF;
+    }
+
+    return 0;
+}
+
+uint8_t platform_cipher_suite_get_zz(struct platform_cipher_suite *cipher_suite) {
+
+    JNIEnv *env = ensure_jni_env();
+    if (env) {
+        jbyte zz = env->GetByteField(cipher_suite->obj, cipher_suite_zz_field_id);
+        return ((int) zz) & 0xFF;
+    }
+
+    return 0;
+}
+
+void platform_free_cipher_suite(struct platform_cipher_suite *cipher_suite) {
+    JNIEnv *env = ensure_jni_env();
+    if (env) {
+        env->DeleteGlobalRef(cipher_suite->obj);
+        free(cipher_suite);
+    }
+}
+
 void *platform_perform_aka(int subscription_id, void *in_data, size_t in_size, size_t *out_size)
 {
     JNIEnv *env = ensure_jni_env();
@@ -1482,4 +1850,54 @@ void *platform_perform_aka(int subscription_id, void *in_data, size_t in_size, s
     }
 
     return nullptr;
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_everfrost_rusty_rcs_client_RustyRcsClient_00024SocketEventReceiver_onConnectAvailable(
+        JNIEnv *env, jclass clazz, jlong native_handle) {
+    auto *nativeHandle = reinterpret_cast<struct socket_event_receiver_handle *>(native_handle);
+    if (nativeHandle) {
+        socket_event_on_connect_avaliable(nativeHandle->receiver);
+    }
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_everfrost_rusty_rcs_client_RustyRcsClient_00024SocketEventReceiver_onHandshakeAvailable(
+        JNIEnv *env, jclass clazz, jlong native_handle) {
+    auto *nativeHandle = reinterpret_cast<struct socket_event_receiver_handle *>(native_handle);
+    if (nativeHandle) {
+        socket_event_on_handshake_avaliable(nativeHandle->receiver);
+    }
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_everfrost_rusty_rcs_client_RustyRcsClient_00024SocketEventReceiver_onReadAvailable(
+        JNIEnv *env, jclass clazz, jlong native_handle) {
+    auto *nativeHandle = reinterpret_cast<struct socket_event_receiver_handle *>(native_handle);
+    if (nativeHandle) {
+        socket_event_on_read_avaliable(nativeHandle->receiver);
+    }
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_everfrost_rusty_rcs_client_RustyRcsClient_00024SocketEventReceiver_onWriteAvailable(
+        JNIEnv *env, jclass clazz, jlong native_handle) {
+    auto *nativeHandle = reinterpret_cast<struct socket_event_receiver_handle *>(native_handle);
+    if (nativeHandle) {
+        socket_event_on_write_avaliable(nativeHandle->receiver);
+    }
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_everfrost_rusty_rcs_client_RustyRcsClient_00024SocketEventReceiver_destroy(
+        JNIEnv *env, jclass clazz, jlong native_handle) {
+    auto *nativeHandle = reinterpret_cast<struct socket_event_receiver_handle *>(native_handle);
+    if (nativeHandle) {
+        destroy_socket_event_receiver(nativeHandle->receiver);
+    }
 }
