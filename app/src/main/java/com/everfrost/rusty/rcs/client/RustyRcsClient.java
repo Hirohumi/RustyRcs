@@ -128,15 +128,9 @@ public class RustyRcsClient {
 
     public static native void destroy(long nativeHandle);
 
-    public static class SocketEventReceiver {
+    public static class AsyncLatchHandle {
 
-        public static native void onConnectAvailable(long nativeHandle);
-
-        public static native void onHandshakeAvailable(long nativeHandle);
-
-        public static native void onReadAvailable(long nativeHandle);
-
-        public static native void onWriteAvailable(long nativeHandle);
+        public static native void wakeUp(long nativeHandle);
 
         public static native void destroy(long nativeHandle);
     }

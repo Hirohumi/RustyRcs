@@ -17,7 +17,6 @@ import android.util.Base64;
 import androidx.annotation.NonNull;
 
 import com.everfrost.rusty.rcs.client.utils.log.LogService;
-import com.everfrost.rusty.rcs.client.RustyRcsClient;
 
 import java.io.IOException;
 import java.net.Inet4Address;
@@ -26,16 +25,25 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.nio.ByteBuffer;
+import java.nio.channels.AlreadyConnectedException;
 import java.nio.channels.Channel;
+import java.nio.channels.ClosedChannelException;
+import java.nio.channels.ClosedSelectorException;
+import java.nio.channels.ConnectionPendingException;
+import java.nio.channels.NoConnectionPendingException;
 import java.nio.channels.NotYetConnectedException;
 import java.nio.channels.ReadableByteChannel;
+import java.nio.channels.SelectableChannel;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
 import java.nio.channels.SocketChannel;
+import java.nio.channels.UnresolvedAddressException;
+import java.nio.channels.UnsupportedAddressTypeException;
 import java.nio.channels.WritableByteChannel;
 import java.security.NoSuchAlgorithmException;
 import java.util.Collections;
 import java.util.Iterator;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.Executor;
@@ -53,7 +61,7 @@ import javax.net.ssl.SSLSession;
 public class ApplicationEnvironment {
 
     static {
-        System.loadLibrary("nativelib");
+        System.loadLibrary("native-lib");
     }
 
     private static final String LOG_TAG = "ApplicationEnvironment";
@@ -80,30 +88,30 @@ public class ApplicationEnvironment {
             public void run() {
                 while (true) {
                     try {
-                        socketSelector.select();
+                        LogService.i(LOG_TAG, "socketSelector.select()");
+                        int r = socketSelector.select();
+                        LogService.i(LOG_TAG, "socketSelector.select() returns " + r);
                         Set<SelectionKey> selectedKeys = socketSelector.selectedKeys();
                         Iterator<SelectionKey> iterator = selectedKeys.iterator();
                         while (iterator.hasNext()) {
                             SelectionKey key = iterator.next();
+                            LogService.i(LOG_TAG, "on SelectionKey " + key);
                             Object attachment = key.attachment();
-                            if (attachment instanceof Long) {
-                                long nativeHandle = (Long) attachment;
+                            if (attachment instanceof AsyncLatch) {
+                                AsyncLatch asyncLatch = (AsyncLatch) attachment;
                                 if (key.isConnectable()) {
-                                    RustyRcsClient.SocketEventReceiver.onConnectAvailable(nativeHandle);
+                                    asyncLatch.wakeUp();
                                 }
                                 if (key.isReadable()) {
-                                    RustyRcsClient.SocketEventReceiver.onReadAvailable(nativeHandle);
+                                    asyncLatch.wakeUp();
                                 }
                                 if (key.isWritable()) {
-                                    RustyRcsClient.SocketEventReceiver.onWriteAvailable(nativeHandle);
+                                    asyncLatch.wakeUp();
                                 }
                             }
 
                             if (attachment instanceof SocketSSLEngine) {
                                 SocketSSLEngine socketSSLEngine = (SocketSSLEngine) attachment;
-                                if (key.isConnectable()) {
-                                    RustyRcsClient.SocketEventReceiver.onConnectAvailable(socketSSLEngine.asyncHandle);
-                                }
                                 if (key.isReadable()) {
                                     socketSSLEngine.onReadAvailable(key);
                                 }
@@ -114,7 +122,7 @@ public class ApplicationEnvironment {
 
                             iterator.remove();
                         }
-                    } catch (IOException e) {
+                    } catch (IOException | ClosedSelectorException | IllegalArgumentException e) {
                         LogService.w(LOG_TAG, "error processing sockets:", e);
                     }
                 }
@@ -259,33 +267,57 @@ public class ApplicationEnvironment {
         return 0;
     }
 
+    private static class AsyncLatch {
+        private final long nativeHandle;
+        private AsyncLatch(long nativeHandle) {
+            this.nativeHandle = nativeHandle;
+        }
+
+        private void wakeUp() {
+            if (nativeHandle != 0L) {
+                RustyRcsClient.AsyncLatchHandle.wakeUp(nativeHandle);
+            }
+        }
+
+        @Override
+        protected void finalize() throws Throwable {
+            super.finalize();
+            if (nativeHandle != 0L) {
+                RustyRcsClient.AsyncLatchHandle.destroy(nativeHandle);
+            }
+        }
+    }
+
     public static class SocketSSLEngine {
 
         private final SSLEngine engine;
 
         private final ByteBuffer readBuffer;
 
-        private final Object decryptionLock = new Object();
-
         private final ByteBuffer decrypted;
+
+        private final Object readLock = new Object();
+
+        private final List<AsyncLatch> sslReadLatches = new LinkedList<>();
 
         private boolean readFailed = false;
 
+        private final Object writeLock = new Object();
+
         private final ByteBuffer writeBuffer;
 
-        private final Object encryptionLock = new Object();
-
         private final ByteBuffer encrypted;
+
+        private final List<AsyncLatch> sslWriteLatches = new LinkedList<>();
 
         private boolean writeFailed = false;
 
         private final Object statusLock = new Object();
 
-        private final long asyncHandle;
+        private final List<AsyncLatch> sslHandshakeLatches = new LinkedList<>();
 
-        private SocketSSLEngine(SSLEngine engine, long asyncHandle) {
+        private SocketSSLEngine(SSLEngine engine) {
             this.engine = engine;
-            this.asyncHandle = asyncHandle;
 
             final int ioBufferSize = 32 * 1024;
 
@@ -306,42 +338,36 @@ public class ApplicationEnvironment {
 
                     ReadableByteChannel readableByteChannel = (ReadableByteChannel) channel;
 
-                    readableByteChannel.read(readBuffer);
+                    int read = readableByteChannel.read(readBuffer); // to-do: read until either buffer is filled or no more readable
 
                     readBuffer.flip();
 
-                    SSLEngineResult.HandshakeStatus handshakeStatus;
+                    synchronized (readLock) {
+
+                        int produced = decrypt();
+
+                        LogService.i(LOG_TAG, "ssl engine produced " + produced + " bytes");
+
+                        if (produced > 0) {
+                            Iterator<AsyncLatch> iterator = sslReadLatches.iterator();
+                            while (iterator.hasNext()) {
+                                AsyncLatch asyncLatch = iterator.next();
+                                asyncLatch.wakeUp();
+                                iterator.remove();
+                            }
+                        }
+                    }
 
                     synchronized (statusLock) {
-                        handshakeStatus = engine.getHandshakeStatus();
-                    }
-
-                    boolean handshakeIsNotFinishedBefore = handshakeStatus != SSLEngineResult.HandshakeStatus.FINISHED;
-
-                    int r;
-
-                    synchronized (decryptionLock) {
-
-                        r = decrypt();
-                    }
-
-                    if (handshakeIsNotFinishedBefore) {
-
-                        synchronized (statusLock) {
-                            handshakeStatus = engine.getHandshakeStatus();
+                        SSLEngineResult.HandshakeStatus handshakeStatus = engine.getHandshakeStatus();
+                        if (handshakeStatus == SSLEngineResult.HandshakeStatus.FINISHED) {
+                            Iterator<AsyncLatch> iterator = sslHandshakeLatches.iterator();
+                            while (iterator.hasNext()) {
+                                AsyncLatch asyncLatch = iterator.next();
+                                asyncLatch.wakeUp();
+                                iterator.remove();
+                            }
                         }
-
-                        boolean handshakeIsFinishedAfter = handshakeStatus == SSLEngineResult.HandshakeStatus.FINISHED;
-
-                        if (handshakeIsFinishedAfter) {
-
-                            RustyRcsClient.SocketEventReceiver.onHandshakeAvailable(asyncHandle);
-                        }
-                    }
-
-                    if (r > 0) {
-
-                        RustyRcsClient.SocketEventReceiver.onReadAvailable(asyncHandle);
                     }
                 }
 
@@ -358,16 +384,21 @@ public class ApplicationEnvironment {
 
                     WritableByteChannel writableByteChannel = (WritableByteChannel) channel;
 
-                    synchronized (encryptionLock) {
+                    synchronized (writeLock) {
 
                         encrypted.flip();
 
-                        int r = writableByteChannel.write(encrypted);
+                        int written = writableByteChannel.write(encrypted); // to-do: write until either buffer is empty or no more writeable
 
-                        if (r > 0) {
+                        if (written > 0) {
                             encrypted.compact();
 
-                            RustyRcsClient.SocketEventReceiver.onWriteAvailable(asyncHandle);
+                            Iterator<AsyncLatch> iterator = sslWriteLatches.iterator();
+                            while (iterator.hasNext()) {
+                                AsyncLatch asyncLatch = iterator.next();
+                                asyncLatch.wakeUp();
+                                iterator.remove();
+                            }
                         }
                     }
                 }
@@ -424,13 +455,21 @@ public class ApplicationEnvironment {
 
     public static class AsyncSocket {
 
+        private final Selector socketSelector;
+
         private final SocketChannel socketChannel;
+
+        private final SelectableChannel selectableChannel;
 
         private final SocketSSLEngine socketSSLEngine;
 
-        private AsyncSocket(SocketChannel socketChannel, SocketSSLEngine socketSSLEngine) {
+        private AsyncSocket(Selector socketSelector, SocketChannel socketChannel, SelectableChannel selectableChannel, SocketSSLEngine socketSSLEngine) {
+
+            this.socketSelector = socketSelector;
 
             this.socketChannel = socketChannel;
+
+            this.selectableChannel = selectableChannel;
 
             this.socketSSLEngine = socketSSLEngine;
         }
@@ -442,23 +481,37 @@ public class ApplicationEnvironment {
             try {
                 socketChannel.connect(inetSocketAddress);
                 return 0;
-            } catch (IOException e) {
+            } catch (IOException
+                     | AlreadyConnectedException
+                     | ConnectionPendingException
+                     | UnresolvedAddressException
+                     | UnsupportedAddressTypeException
+                     | SecurityException e) {
                 LogService.w(LOG_TAG, "error attempting to connect to address " + inetSocketAddress);
             }
 
             return -1;
         }
 
-        public int finishConnect() {
+        public int finishConnect(long asyncHandle) {
 
             try {
                 if (socketChannel.finishConnect()) {
                     return 0;
                 } else {
+                    try {
+                        SelectionKey selectionKey = selectableChannel.register(socketSelector, SelectionKey.OP_CONNECT, asyncHandle);
+                        LogService.i(LOG_TAG, "selectableChannel event registered with:" + selectionKey);
+                        socketSelector.wakeup();
+                    } catch (ClosedChannelException | IllegalStateException | IllegalArgumentException e) {
+                        LogService.w(LOG_TAG, "failed to register selectable channel:", e);
+                        return -1;
+                    }
+
                     return 114; // EALREADY
                 }
-            } catch (IOException e) {
-                LogService.w(LOG_TAG, "error attempting to finish connection");
+            } catch (NoConnectionPendingException | IOException e) {
+                LogService.w(LOG_TAG, "error attempting to finish connection:", e);
             }
 
             return -1;
@@ -470,8 +523,19 @@ public class ApplicationEnvironment {
 
                 try {
                     socketSSLEngine.engine.beginHandshake();
+
+                    try {
+                        SelectionKey selectionKey = selectableChannel.register(socketSelector, SelectionKey.OP_READ | SelectionKey.OP_WRITE, socketSSLEngine);
+                        LogService.i(LOG_TAG, "selectableChannel event registered with:" + selectionKey);
+                        socketSelector.wakeup();
+                    } catch (ClosedChannelException | IllegalStateException |
+                             IllegalArgumentException e) {
+                        LogService.w(LOG_TAG, "failed to register selectable channel:", e);
+                        return -1;
+                    }
+
                     return 0;
-                } catch (SSLException e) {
+                } catch (SSLException | IllegalStateException e) {
                     LogService.w(LOG_TAG, "error attempting handshake", e);
                 }
 
@@ -483,79 +547,112 @@ public class ApplicationEnvironment {
             }
         }
 
-        public int finishHandshake() {
+        public int finishHandshake(long asyncHandle) {
+
+            AsyncLatch asyncLatch = new AsyncLatch(asyncHandle);
 
             if (socketSSLEngine != null) {
 
-                SSLEngineResult.HandshakeStatus handshakeStatus;
-
                 synchronized (socketSSLEngine.statusLock) {
-                    handshakeStatus = socketSSLEngine.engine.getHandshakeStatus();
-                }
 
-                if (handshakeStatus == SSLEngineResult.HandshakeStatus.FINISHED) {
-                    return 0;
-                } else if (handshakeStatus == SSLEngineResult.HandshakeStatus.NEED_TASK) {
+                    SSLEngineResult.HandshakeStatus handshakeStatus = socketSSLEngine.engine.getHandshakeStatus();
 
-                    LogService.i(LOG_TAG, "need to perform some task");
+                    LogService.i(LOG_TAG, "ssl engine handshake status is " + handshakeStatus);
 
-                    Runnable task = socketSSLEngine.engine.getDelegatedTask();
+                    if (handshakeStatus == SSLEngineResult.HandshakeStatus.FINISHED) {
+                        return 0;
+                    } else if (handshakeStatus == SSLEngineResult.HandshakeStatus.NEED_TASK) {
 
-                    executor.execute(() -> {
+                        LogService.i(LOG_TAG, "ssl need to perform some task");
 
-                        task.run();
+                        Runnable task = socketSSLEngine.engine.getDelegatedTask();
 
-                        LogService.i(LOG_TAG, "task complete");
+                        executor.execute(() -> {
 
-                        RustyRcsClient.SocketEventReceiver.onHandshakeAvailable(socketSSLEngine.asyncHandle);
-                    });
+                            task.run();
 
-                } else if (handshakeStatus == SSLEngineResult.HandshakeStatus.NEED_WRAP) {
+                            LogService.i(LOG_TAG, "ssl task complete");
 
-                    synchronized (socketSSLEngine.encryptionLock) {
+                            asyncLatch.wakeUp();
+                        });
 
-                        int r = socketSSLEngine.encrypt();
+                        return 114; // EALREADY
 
-                        if (r >= 0) {
+                    } else if (handshakeStatus == SSLEngineResult.HandshakeStatus.NEED_WRAP) {
 
-                            if (socketSSLEngine.encrypted.position() != 0) {
+                        synchronized (socketSSLEngine.writeLock) {
 
-                                socketSSLEngine.encrypted.flip();
+                            int r = socketSSLEngine.encrypt();
 
-                                try {
-                                    socketChannel.write(socketSSLEngine.encrypted);
-                                    socketSSLEngine.encrypted.compact();
+                            LogService.i(LOG_TAG, "ssl engine encrypted " + r + " bytes");
 
-                                    synchronized (socketSSLEngine.statusLock) {
-                                        handshakeStatus = socketSSLEngine.engine.getHandshakeStatus();
-                                        if (handshakeStatus == SSLEngineResult.HandshakeStatus.FINISHED) {
-                                            return 0;
+                            if (r >= 0) {
+
+                                if (socketSSLEngine.encrypted.position() != 0) {
+
+                                    socketSSLEngine.encrypted.flip();
+
+                                    try {
+                                        int written = socketChannel.write(socketSSLEngine.encrypted); // TODO: 2023/11/10 register OP_WRITE if we cannot write enough bytes (highly unlikly)
+                                        socketSSLEngine.encrypted.compact();
+
+                                        synchronized (socketSSLEngine.statusLock) {
+                                            handshakeStatus = socketSSLEngine.engine.getHandshakeStatus();
+                                            if (handshakeStatus == SSLEngineResult.HandshakeStatus.FINISHED) {
+                                                return 0;
+                                            }
                                         }
-                                    }
 
-                                    return 114;
-                                } catch (IOException e) {
-                                    LogService.w(LOG_TAG, "error writing tls socket:", e);
+                                        socketSSLEngine.sslHandshakeLatches.add(asyncLatch);
+
+//                                        try {
+//                                            SelectionKey selectionKey = selectableChannel.register(socketSelector, SelectionKey.OP_WRITE, socketSSLEngine);
+//                                            LogService.i(LOG_TAG, "selectableChannel event registered with:" + selectionKey);
+//                                            socketSelector.wakeup();
+//                                        } catch (ClosedChannelException | IllegalStateException |
+//                                                 IllegalArgumentException e) {
+//                                            LogService.w(LOG_TAG, "failed to register selectable channel:", e);
+//                                            return -1;
+//                                        }
+
+                                        return 114;
+                                    } catch (IOException e) {
+                                        LogService.w(LOG_TAG, "error writing tls socket:", e);
+                                    }
                                 }
                             }
                         }
+
+                        return - 1;
+
+                    } else if (handshakeStatus == SSLEngineResult.HandshakeStatus.NEED_UNWRAP) {
+
+                        socketSSLEngine.sslHandshakeLatches.add(asyncLatch);
+
+                        try {
+                            SelectionKey selectionKey = selectableChannel.register(socketSelector, SelectionKey.OP_READ, socketSSLEngine);
+                            LogService.i(LOG_TAG, "selectableChannel event registered with:" + selectionKey);
+                            socketSelector.wakeup();
+                        } catch (ClosedChannelException | IllegalStateException |
+                                 IllegalArgumentException e) {
+                            LogService.w(LOG_TAG, "failed to register selectable channel:", e);
+                            return -1;
+                        }
+
+                        return 114; // EALREADY
+
+                    } else if (handshakeStatus == SSLEngineResult.HandshakeStatus.NOT_HANDSHAKING) {
+
+                        socketSSLEngine.sslHandshakeLatches.add(asyncLatch);
+
+                        try {
+                            socketSSLEngine.engine.beginHandshake();
+                        } catch (SSLException | IllegalStateException e) {
+                            LogService.w(LOG_TAG, "error attempting handshake", e);
+                        }
+
+                        return 114; // EALREADY
                     }
-
-                    return - 1;
-
-                } else if (handshakeStatus == SSLEngineResult.HandshakeStatus.NEED_UNWRAP) {
-
-                    return 114;
-
-                } else if (handshakeStatus == SSLEngineResult.HandshakeStatus.NOT_HANDSHAKING) {
-
-                    try {
-                        socketSSLEngine.engine.beginHandshake();
-                    } catch (SSLException e) {
-                        LogService.w(LOG_TAG, "error attempting handshake", e);
-                    }
-
-                    return 114; // EALREADY
                 }
 
                 return -1;
@@ -566,103 +663,200 @@ public class ApplicationEnvironment {
             }
         }
 
-        public int read(byte[] bytes) {
+        public int read(byte[] bytes, long asyncHandle) {
+
+            AsyncLatch asyncLatch = new AsyncLatch(asyncHandle);
 
             if (socketSSLEngine != null) {
 
-                synchronized (socketSSLEngine.decryptionLock) {
+                int read;
+
+                synchronized (socketSSLEngine.readLock) {
+
+                    // TODO: 2023/11/10 read everything
+
+                    socketSSLEngine.decrypted.flip();
 
                     int remaining = socketSSLEngine.decrypted.remaining();
 
+                    LogService.i(LOG_TAG, "decrypted remaining:" + remaining);
+
                     if (remaining > 0) {
-
-                        socketSSLEngine.decrypted.flip();
-
-                        socketSSLEngine.decrypted.get(bytes);
+                        if (remaining > bytes.length) {
+                            socketSSLEngine.decrypted.get(bytes);
+                        } else {
+                            socketSSLEngine.decrypted.get(bytes, 0, remaining);
+                        }
 
                         int after = socketSSLEngine.decrypted.remaining();
 
                         if (after < remaining) {
                             socketSSLEngine.decrypted.compact();
-                            return remaining - after;
+                            read = remaining - after;
                         } else {
-                            return 0;
+                            read = 0;
                         }
                     } else {
-                        return 0;
+                        read = 0;
+                    }
+
+                    LogService.i(LOG_TAG, "decrypted read:" + read);
+
+                    if (read == 0) {
+                        socketSSLEngine.sslReadLatches.add(asyncLatch);
                     }
                 }
 
+                return read;
+
             } else {
+
+                int read;
 
                 ByteBuffer byteBuffer = ByteBuffer.wrap(bytes);
 
                 try {
 
-                    return socketChannel.read(byteBuffer);
+                    read = socketChannel.read(byteBuffer);
 
                 } catch (NotYetConnectedException e) {
 
-                    return 0;
+                    LogService.w(LOG_TAG, "socket not yet connected:", e);
+
+                    read = 0;
 
                 } catch (IOException e) {
 
                     LogService.w(LOG_TAG, "error reading socket:", e);
+
+                    return -1;
                 }
-            }
 
-            return - 1;
-        }
+                if (read == 0) {
 
-        public int write(byte[] bytes) {
-
-            if (socketSSLEngine != null) {
-
-                socketSSLEngine.writeBuffer.put(bytes);
-
-                socketSSLEngine.writeBuffer.flip();
-
-                synchronized (socketSSLEngine.encryptionLock) {
-
-                    int r = socketSSLEngine.encrypt();
-
-                    if (r > 0) {
-
-                        socketSSLEngine.encrypted.flip();
-
-                        try {
-                            socketChannel.write(socketSSLEngine.encrypted);
-                            socketSSLEngine.encrypted.compact();
-                            return r;
-                        } catch (IOException e) {
-                            LogService.w(LOG_TAG, "error writing tls socket:", e);
-                        }
-
-                    } else {
-
-                        return r;
+                    try {
+                        SelectionKey selectionKey = selectableChannel.register(socketSelector, SelectionKey.OP_READ, asyncLatch);
+                        LogService.i(LOG_TAG, "selectableChannel event registered with:" + selectionKey);
+                        socketSelector.wakeup();
+                    } catch (ClosedChannelException | IllegalStateException |
+                             IllegalArgumentException e) {
+                        LogService.w(LOG_TAG, "failed to register selectable channel:", e);
+                        return -1;
                     }
                 }
 
+                return read;
+            }
+        }
+
+        public int write(byte[] bytes, long asyncHandle) {
+
+            AsyncLatch asyncLatch = new AsyncLatch(asyncHandle);
+
+            if (socketSSLEngine != null) {
+
+                int written = 0;
+
+                synchronized (socketSSLEngine.writeLock) {
+
+                    int remaining;
+
+                    do {
+
+                        remaining = socketSSLEngine.writeBuffer.remaining();
+
+                        LogService.i(LOG_TAG, "writeBuffer remaining:" + remaining);
+
+                        if (remaining > 0) {
+
+                            int writtenThisTime;
+                            if (remaining > bytes.length - written) {
+                                socketSSLEngine.writeBuffer.put(bytes, written, bytes.length - written);
+                                writtenThisTime = bytes.length - written;
+                            } else {
+                                socketSSLEngine.writeBuffer.put(bytes, written, remaining);
+                                writtenThisTime = remaining;
+                            }
+
+                            written = written + writtenThisTime;
+
+                            if (writtenThisTime > 0) {
+
+                                socketSSLEngine.writeBuffer.flip();
+
+                                int consumed = socketSSLEngine.encrypt();
+
+                                LogService.i(LOG_TAG, "ssl engine consumed " + consumed + " bytes");
+
+                                if (consumed > 0) {
+
+                                    remaining += consumed;
+
+                                    socketSSLEngine.encrypted.flip();
+
+                                    try {
+                                        socketChannel.write(socketSSLEngine.encrypted);
+                                        socketSSLEngine.encrypted.compact();
+                                    } catch (NotYetConnectedException e) {
+                                        LogService.w(LOG_TAG, "socket not yet connected:", e);
+                                    } catch (IOException e) {
+                                        LogService.w(LOG_TAG, "error writing tls socket:", e);
+                                        return -1;
+                                    }
+                                }
+
+                                if (consumed == -1) {
+                                    return -1;
+                                }
+                            }
+                        }
+
+                    } while (written < bytes.length && remaining > 0);
+
+                    if (written == 0) {
+                        socketSSLEngine.sslWriteLatches.add(asyncLatch);
+                    }
+                }
+
+                return written;
+
             } else {
+
+                int written;
+
+                ByteBuffer byteBuffer = ByteBuffer.wrap(bytes);
 
                 try {
 
-                    ByteBuffer byteBuffer = ByteBuffer.wrap(bytes);
-
-                    return socketChannel.write(byteBuffer);
+                    written = socketChannel.write(byteBuffer);
 
                 } catch (NotYetConnectedException e) {
 
-                    return 0;
+                    LogService.w(LOG_TAG, "socket not yet connected:", e);
+
+                    written = 0;
 
                 } catch (IOException e) {
 
                     LogService.w(LOG_TAG, "error writing socket:", e);
-                }
-            }
 
-            return - 1;
+                    return -1;
+                }
+
+                if (written == 0) {
+
+                    try {
+                        SelectionKey selectionKey = selectableChannel.register(socketSelector, SelectionKey.OP_WRITE, asyncLatch);
+                        LogService.i(LOG_TAG, "selectableChannel event registered with:" + selectionKey);
+                        socketSelector.wakeup();
+                    } catch (ClosedChannelException | IllegalStateException | IllegalArgumentException e) {
+                        LogService.w(LOG_TAG, "failed to register selectable channel:", e);
+                        return -1;
+                    }
+                }
+
+                return written;
+            }
         }
 
         public int close() {
@@ -733,36 +927,48 @@ public class ApplicationEnvironment {
         }
     }
 
-    public AsyncSocket createSocket(long asyncHandle, boolean useTLS, String hostName) {
+    public AsyncSocket createSocket(boolean useTLS, String hostName) {
+
+        LogService.i(LOG_TAG, "createSocket with TLS enabled:" + useTLS + ", hostName=" + hostName);
 
         try {
 
             SocketChannel socketChannel = SocketChannel.open();
 
+            LogService.i(LOG_TAG, "SocketChannel opened:" + socketChannel);
+
             if (socketChannel != null) {
 
-                socketChannel.configureBlocking(false);
+                SelectableChannel selectableChannel = socketChannel.configureBlocking(false);
+
+                LogService.i(LOG_TAG, "configureBlocking:false with:" + selectableChannel);
 
                 if (useTLS) {
 
-                    SSLEngine engine = SSLContext.getDefault().createSSLEngine();
-                    engine.setUseClientMode(true);
-                    SSLParameters sslParameters = new SSLParameters();
-                    SNIServerName sniServerName = new SNIHostName(hostName);
-                    sslParameters.setServerNames(Collections.singletonList(sniServerName));
-                    engine.setSSLParameters(sslParameters);
+                    SSLEngine engine;
 
-                    SocketSSLEngine socketSSLEngine = new SocketSSLEngine(engine, asyncHandle);
+                    try {
 
-                    socketChannel.register(socketSelector, SelectionKey.OP_READ | SelectionKey.OP_WRITE | SelectionKey.OP_CONNECT, socketSSLEngine);
+                        engine = SSLContext.getDefault().createSSLEngine();
+                        engine.setUseClientMode(true);
+                        SSLParameters sslParameters = new SSLParameters();
+                        SNIServerName sniServerName = new SNIHostName(hostName);
+                        sslParameters.setServerNames(Collections.singletonList(sniServerName));
+                        engine.setSSLParameters(sslParameters);
+                    } catch (IllegalStateException | IllegalArgumentException e) {
+                        LogService.w(LOG_TAG, "failed to configure ssl engine:", e);
+                        return null;
+                    }
 
-                    return new AsyncSocket(socketChannel, socketSSLEngine);
+                    LogService.i(LOG_TAG, "configured ssl engine");
+
+                    SocketSSLEngine socketSSLEngine = new SocketSSLEngine(engine);
+
+                    return new AsyncSocket(socketSelector, socketChannel, selectableChannel, socketSSLEngine);
 
                 } else {
 
-                    socketChannel.register(socketSelector, SelectionKey.OP_READ | SelectionKey.OP_WRITE | SelectionKey.OP_CONNECT, asyncHandle);
-
-                    return new AsyncSocket(socketChannel, null);
+                    return new AsyncSocket(socketSelector, socketChannel, selectableChannel, null);
                 }
             }
 

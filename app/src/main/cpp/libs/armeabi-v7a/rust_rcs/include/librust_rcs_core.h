@@ -57,18 +57,23 @@ socklen_t platform_get_in6addr_any(struct sockaddr_storage *c_struct);
 char *platform_ntop(int af, struct sockaddr_storage c_struct);
 int platform_pton(int af, const char *network_address, struct sockaddr_storage *c_struct);
 
+// async
+
+struct rust_async_waker;
+
+extern void rust_async_wake_up(struct rust_async_waker *waker);
+extern void rust_async_destroy_waker(struct rust_async_waker *waker);
+
 // android sock
 struct platform_socket;
 
-struct socket_event_receiver;
-
-struct platform_socket *platform_create_socket(struct socket_event_receiver *receiver, bool use_tls, const char *host_name);
+struct platform_socket *platform_create_socket(bool use_tls, const char *host_name);
 int platform_socket_connect(struct platform_socket *sock, const char *r_addr, u_int16_t r_port);
-int platform_socket_finish_connect(struct platform_socket *sock);
+int platform_socket_finish_connect(struct platform_socket *sock, struct rust_async_waker *waker);
 int platform_socket_start_handshake(struct platform_socket *sock);
-int platform_socket_finish_handshake(struct platform_socket *sock);
-int platform_read_socket(struct platform_socket *sock, void *buffer, size_t buffer_len, size_t *bytes_read);
-int platform_write_socket(struct platform_socket *sock, void *buffer, size_t buffer_len, size_t *bytes_written);
+int platform_socket_finish_handshake(struct platform_socket *sock, struct rust_async_waker *waker);
+int platform_read_socket(struct platform_socket *sock, struct rust_async_waker *waker, void *buffer, size_t buffer_len, size_t *bytes_read);
+int platform_write_socket(struct platform_socket *sock, struct rust_async_waker *waker, void *buffer, size_t buffer_len, size_t *bytes_written);
 void platform_close_socket(struct platform_socket *sock);
 void platform_free_socket(struct platform_socket *sock);
 
@@ -86,10 +91,3 @@ struct platform_cipher_suite *platform_get_socket_session_cipher_suite(struct pl
 uint8_t platform_cipher_suite_get_yy(struct platform_cipher_suite *cipher_suite);
 uint8_t platform_cipher_suite_get_zz(struct platform_cipher_suite *cipher_suite);
 void platform_free_cipher_suite(struct platform_cipher_suite *cipher_suite);
-
-extern void socket_event_on_connect_avaliable(struct socket_event_receiver *receiver);
-extern void socket_event_on_handshake_avaliable(struct socket_event_receiver *receiver);
-extern void socket_event_on_read_avaliable(struct socket_event_receiver *receiver);
-extern void socket_event_on_write_avaliable(struct socket_event_receiver *receiver);
-
-extern void destroy_socket_event_receiver(struct socket_event_receiver *receiver);

@@ -82,8 +82,8 @@ struct retrieve_chatbot_info_result_callback_context {
     jobject obj;
 };
 
-struct socket_event_receiver_handle {
-    struct socket_event_receiver *receiver;
+struct rust_async_waker_handle {
+    struct rust_async_waker *waker;
 };
 
 static JavaVM *javaVm = nullptr;
@@ -1311,21 +1311,21 @@ Java_com_everfrost_rusty_rcs_client_ApplicationEnvironment_registerHostEnvironme
     dns_info_get_server_address_method_id = env->GetMethodID(dnsInfoClass, "getNextServerAddress", "()Ljava/lang/String;");
 
     create_socket_method_id = env->GetMethodID(clazz, "createSocket",
-                                               "(JZLjava/lang/String;)Lcom/everfrost/rusty/rcs/client/ApplicationEnvironment$AsyncSocket;");
+                                               "(ZLjava/lang/String;)Lcom/everfrost/rusty/rcs/client/ApplicationEnvironment$AsyncSocket;");
 
     jclass socketClass = env->FindClass("com/everfrost/rusty/rcs/client/ApplicationEnvironment$AsyncSocket");
 
     socket_connect_method_id = env->GetMethodID(socketClass, "connect", "(Ljava/lang/String;I)I");
 
-    socket_finish_connect_method_id = env->GetMethodID(socketClass, "finishConnect", "()I");
+    socket_finish_connect_method_id = env->GetMethodID(socketClass, "finishConnect", "(J)I");
 
     socket_start_handshake_method_id = env->GetMethodID(socketClass, "startHandshake", "()I");
 
-    socket_finish_handshake_method_id = env->GetMethodID(socketClass, "finishHandshake", "()I");
+    socket_finish_handshake_method_id = env->GetMethodID(socketClass, "finishHandshake", "(J)I");
 
-    read_socket_method_id = env->GetMethodID(socketClass, "read", "([B)I");
+    read_socket_method_id = env->GetMethodID(socketClass, "read", "([BJ)I");
 
-    write_socket_method_id = env->GetMethodID(socketClass, "write", "([B)I");
+    write_socket_method_id = env->GetMethodID(socketClass, "write", "([BJ)I");
 
     close_socket_method_id = env->GetMethodID(socketClass, "close", "()I");
 
@@ -1555,18 +1555,18 @@ struct platform_socket {
     jobject obj;
 };
 
-struct platform_socket *platform_create_socket(struct socket_event_receiver *receiver, bool use_tls, const char *host_name) {
+struct platform_socket *platform_create_socket(bool use_tls, const char *host_name) {
+
+    __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, "platform_create_socket\n");
 
     JNIEnv *env = ensure_jni_env();
     if (env) {
 
-        auto *receiverHandle = static_cast<struct socket_event_receiver_handle *>(calloc(1, sizeof (struct socket_event_receiver_handle)));
-
-        receiverHandle->receiver = receiver;
-
         jstring hostName = env->NewStringUTF(host_name);
 
-        jobject r = env->CallObjectMethod(host_environment, create_socket_method_id, reinterpret_cast<jlong>(receiverHandle), use_tls, hostName);
+        jobject r = env->CallObjectMethod(host_environment, create_socket_method_id, use_tls, hostName);
+
+        __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, "createSocket() returns %p\n", r);
 
         if (r) {
             auto *handle = static_cast<platform_socket *>(calloc(1, sizeof(struct platform_socket)));
@@ -1582,6 +1582,8 @@ struct platform_socket *platform_create_socket(struct socket_event_receiver *rec
 
 int platform_socket_connect(struct platform_socket *sock, const char *r_addr, u_int16_t r_port) {
 
+    __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, "platform_socket_connect\n");
+
     JNIEnv *env = ensure_jni_env();
     if (env) {
 
@@ -1593,11 +1595,23 @@ int platform_socket_connect(struct platform_socket *sock, const char *r_addr, u_
     return -1;
 }
 
-int platform_socket_finish_connect(struct platform_socket *sock) {
+int platform_socket_finish_connect(struct platform_socket *sock, struct rust_async_waker *waker) {
+
+    __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, "platform_socket_finish_connect\n");
 
     JNIEnv *env = ensure_jni_env();
     if (env) {
-        int r = env->CallIntMethod(sock->obj, socket_finish_connect_method_id);
+        struct rust_async_waker_handle *wakerHandle;
+        if (waker) {
+            wakerHandle = static_cast<rust_async_waker_handle *>(calloc(1,
+                                                                        sizeof(struct rust_async_waker_handle)));
+        } else {
+            wakerHandle = nullptr;
+        }
+
+        auto handle = reinterpret_cast<jlong>(wakerHandle);
+
+        int r = env->CallIntMethod(sock->obj, socket_finish_connect_method_id, handle);
         if (r == 114) {
             return EALREADY;
         }
@@ -1609,6 +1623,8 @@ int platform_socket_finish_connect(struct platform_socket *sock) {
 
 int platform_socket_start_handshake(struct platform_socket *sock) {
 
+    __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, "platform_socket_start_handshake\n");
+
     JNIEnv *env = ensure_jni_env();
     if (env) {
         return env->CallIntMethod(sock->obj, socket_start_handshake_method_id);
@@ -1617,11 +1633,23 @@ int platform_socket_start_handshake(struct platform_socket *sock) {
     return -1;
 }
 
-int platform_socket_finish_handshake(struct platform_socket *sock) {
+int platform_socket_finish_handshake(struct platform_socket *sock, struct rust_async_waker *waker) {
+
+    __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, "platform_socket_finish_handshake\n");
 
     JNIEnv *env = ensure_jni_env();
     if (env) {
-        int r = env->CallIntMethod(sock->obj, socket_finish_handshake_method_id);
+        struct rust_async_waker_handle *wakerHandle;
+        if (waker) {
+            wakerHandle = static_cast<rust_async_waker_handle *>(calloc(1,
+                                                                        sizeof(struct rust_async_waker_handle)));
+        } else {
+            wakerHandle = nullptr;
+        }
+
+        auto handle = reinterpret_cast<jlong>(wakerHandle);
+
+        int r = env->CallIntMethod(sock->obj, socket_finish_handshake_method_id, handle);
         if (r == 114) {
             return EALREADY;
         }
@@ -1631,14 +1659,25 @@ int platform_socket_finish_handshake(struct platform_socket *sock) {
     return -1;
 }
 
-int platform_read_socket(struct platform_socket *sock, void *buffer, size_t buffer_len, size_t *bytes_read) {
+int platform_read_socket(struct platform_socket *sock, struct rust_async_waker *waker, void *buffer, size_t buffer_len, size_t *bytes_read) {
+
+    __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, "platform_read_socket\n");
 
     JNIEnv *env = ensure_jni_env();
     if (env) {
+        struct rust_async_waker_handle *wakerHandle;
+        if (waker) {
+            wakerHandle = static_cast<rust_async_waker_handle *>(calloc(1,
+                                                                        sizeof(struct rust_async_waker_handle)));
+        } else {
+            wakerHandle = nullptr;
+        }
+
+        auto handle = reinterpret_cast<jlong>(wakerHandle);
 
         jbyteArray jBuffer = env->NewByteArray(buffer_len);
 
-        jint ret = env->CallIntMethod(sock->obj, read_socket_method_id, jBuffer);
+        jint ret = env->CallIntMethod(sock->obj, read_socket_method_id, jBuffer, handle);
 
         if (ret > 0) {
             env->GetByteArrayRegion(jBuffer, 0, ret, reinterpret_cast<jbyte *>(buffer));
@@ -1656,16 +1695,27 @@ int platform_read_socket(struct platform_socket *sock, void *buffer, size_t buff
     return ENOTSUP;
 }
 
-int platform_write_socket(struct platform_socket *sock, void *buffer, size_t buffer_len, size_t *bytes_written) {
+int platform_write_socket(struct platform_socket *sock, struct rust_async_waker *waker, void *buffer, size_t buffer_len, size_t *bytes_written) {
+
+    __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, "platform_write_socket\n");
 
     JNIEnv *env = ensure_jni_env();
     if (env) {
+        struct rust_async_waker_handle *wakerHandle;
+        if (waker) {
+            wakerHandle = static_cast<rust_async_waker_handle *>(calloc(1,
+                                                                        sizeof(struct rust_async_waker_handle)));
+        } else {
+            wakerHandle = nullptr;
+        }
+
+        auto handle = reinterpret_cast<jlong>(wakerHandle);
 
         jbyteArray bytes = env->NewByteArray(buffer_len);
 
         env->SetByteArrayRegion(bytes, 0, buffer_len, reinterpret_cast<const jbyte *>(buffer));
 
-        int r = env->CallIntMethod(sock->obj, write_socket_method_id, bytes);
+        int r = env->CallIntMethod(sock->obj, write_socket_method_id, bytes, handle);
 
         if (r > 0) {
             *bytes_written = r;
@@ -1684,6 +1734,8 @@ int platform_write_socket(struct platform_socket *sock, void *buffer, size_t buf
 
 void platform_close_socket(struct platform_socket *sock) {
 
+    __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, "platform_close_socket\n");
+
     JNIEnv *env = ensure_jni_env();
     if (env) {
 
@@ -1692,6 +1744,8 @@ void platform_close_socket(struct platform_socket *sock) {
 }
 
 void platform_free_socket(struct platform_socket *sock) {
+
+    __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, "platform_free_socket\n");
 
     JNIEnv *env = ensure_jni_env();
     if (env) {
@@ -1854,50 +1908,22 @@ void *platform_perform_aka(int subscription_id, void *in_data, size_t in_size, s
 
 extern "C"
 JNIEXPORT void JNICALL
-Java_com_everfrost_rusty_rcs_client_RustyRcsClient_00024SocketEventReceiver_onConnectAvailable(
+Java_com_everfrost_rusty_rcs_client_RustyRcsClient_00024AsyncLatchHandle_wakeUp(
         JNIEnv *env, jclass clazz, jlong native_handle) {
-    auto *nativeHandle = reinterpret_cast<struct socket_event_receiver_handle *>(native_handle);
+    auto *nativeHandle = reinterpret_cast<struct rust_async_waker_handle *>(native_handle);
+    __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, "JNI wake up %p\n", nativeHandle);
     if (nativeHandle) {
-        socket_event_on_connect_avaliable(nativeHandle->receiver);
+        rust_async_wake_up(nativeHandle->waker);
     }
 }
 
 extern "C"
 JNIEXPORT void JNICALL
-Java_com_everfrost_rusty_rcs_client_RustyRcsClient_00024SocketEventReceiver_onHandshakeAvailable(
+Java_com_everfrost_rusty_rcs_client_RustyRcsClient_00024AsyncLatchHandle_destroy(
         JNIEnv *env, jclass clazz, jlong native_handle) {
-    auto *nativeHandle = reinterpret_cast<struct socket_event_receiver_handle *>(native_handle);
+    auto *nativeHandle = reinterpret_cast<struct rust_async_waker_handle *>(native_handle);
+    __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, "JNI destroy %p\n", nativeHandle);
     if (nativeHandle) {
-        socket_event_on_handshake_avaliable(nativeHandle->receiver);
-    }
-}
-
-extern "C"
-JNIEXPORT void JNICALL
-Java_com_everfrost_rusty_rcs_client_RustyRcsClient_00024SocketEventReceiver_onReadAvailable(
-        JNIEnv *env, jclass clazz, jlong native_handle) {
-    auto *nativeHandle = reinterpret_cast<struct socket_event_receiver_handle *>(native_handle);
-    if (nativeHandle) {
-        socket_event_on_read_avaliable(nativeHandle->receiver);
-    }
-}
-
-extern "C"
-JNIEXPORT void JNICALL
-Java_com_everfrost_rusty_rcs_client_RustyRcsClient_00024SocketEventReceiver_onWriteAvailable(
-        JNIEnv *env, jclass clazz, jlong native_handle) {
-    auto *nativeHandle = reinterpret_cast<struct socket_event_receiver_handle *>(native_handle);
-    if (nativeHandle) {
-        socket_event_on_write_avaliable(nativeHandle->receiver);
-    }
-}
-
-extern "C"
-JNIEXPORT void JNICALL
-Java_com_everfrost_rusty_rcs_client_RustyRcsClient_00024SocketEventReceiver_destroy(
-        JNIEnv *env, jclass clazz, jlong native_handle) {
-    auto *nativeHandle = reinterpret_cast<struct socket_event_receiver_handle *>(native_handle);
-    if (nativeHandle) {
-        destroy_socket_event_receiver(nativeHandle->receiver);
+        rust_async_destroy_waker(nativeHandle->waker);
     }
 }
