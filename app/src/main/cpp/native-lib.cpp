@@ -1605,6 +1605,8 @@ int platform_socket_finish_connect(struct platform_socket *sock, struct rust_asy
         if (waker) {
             wakerHandle = static_cast<rust_async_waker_handle *>(calloc(1,
                                                                         sizeof(struct rust_async_waker_handle)));
+
+            wakerHandle->waker = waker;
         } else {
             wakerHandle = nullptr;
         }
@@ -1643,6 +1645,8 @@ int platform_socket_finish_handshake(struct platform_socket *sock, struct rust_a
         if (waker) {
             wakerHandle = static_cast<rust_async_waker_handle *>(calloc(1,
                                                                         sizeof(struct rust_async_waker_handle)));
+
+            wakerHandle->waker = waker;
         } else {
             wakerHandle = nullptr;
         }
@@ -1669,6 +1673,8 @@ int platform_read_socket(struct platform_socket *sock, struct rust_async_waker *
         if (waker) {
             wakerHandle = static_cast<rust_async_waker_handle *>(calloc(1,
                                                                         sizeof(struct rust_async_waker_handle)));
+
+            wakerHandle->waker = waker;
         } else {
             wakerHandle = nullptr;
         }
@@ -1705,6 +1711,8 @@ int platform_write_socket(struct platform_socket *sock, struct rust_async_waker 
         if (waker) {
             wakerHandle = static_cast<rust_async_waker_handle *>(calloc(1,
                                                                         sizeof(struct rust_async_waker_handle)));
+
+            wakerHandle->waker = waker;
         } else {
             wakerHandle = nullptr;
         }
