@@ -1265,6 +1265,8 @@ static jmethodID read_socket_method_id = nullptr;
 
 static jmethodID write_socket_method_id = nullptr;
 
+static jmethodID shutdown_socket_method_id = nullptr;
+
 static jmethodID close_socket_method_id = nullptr;
 
 static jmethodID get_socket_info_method_id = nullptr;
@@ -1327,7 +1329,9 @@ Java_com_everfrost_rusty_rcs_client_ApplicationEnvironment_registerHostEnvironme
 
     write_socket_method_id = env->GetMethodID(socketClass, "write", "([BJ)I");
 
-    close_socket_method_id = env->GetMethodID(socketClass, "close", "()I");
+    shutdown_socket_method_id = env->GetMethodID(socketClass, "shutDown", "(J)I");
+
+    close_socket_method_id = env->GetMethodID(socketClass, "close", "()V");
 
     get_socket_info_method_id = env->GetMethodID(socketClass, "getSocketInfo",
                                                  "()Lcom/everfrost/rusty/rcs/client/ApplicationEnvironment$AsyncSocket$SocketInfo;");
@@ -1740,6 +1744,36 @@ int platform_write_socket(struct platform_socket *sock, struct rust_async_waker 
     return ENOTSUP;
 }
 
+int platform_shutdown_socket(struct platform_socket *sock, struct rust_async_waker *waker) {
+
+    __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, "platform_shutdown_socket\n");
+
+    JNIEnv *env = ensure_jni_env();
+    if (env) {
+        struct rust_async_waker_handle *wakerHandle;
+        if (waker) {
+            wakerHandle = static_cast<rust_async_waker_handle *>(calloc(1,
+                                                                        sizeof(struct rust_async_waker_handle)));
+
+            wakerHandle->waker = waker;
+        } else {
+            wakerHandle = nullptr;
+        }
+
+        auto handle = reinterpret_cast<jlong>(wakerHandle);
+
+        int r = env->CallIntMethod(sock->obj, shutdown_socket_method_id, handle);
+
+        if (r == 114) {
+            return EALREADY;
+        }
+
+        return r;
+    }
+
+    return ENOTSUP;
+}
+
 void platform_close_socket(struct platform_socket *sock) {
 
     __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, "platform_close_socket\n");
@@ -1747,7 +1781,7 @@ void platform_close_socket(struct platform_socket *sock) {
     JNIEnv *env = ensure_jni_env();
     if (env) {
 
-        int r = env->CallIntMethod(sock->obj, close_socket_method_id);
+        env->CallVoidMethod(sock->obj, close_socket_method_id);
     }
 }
 

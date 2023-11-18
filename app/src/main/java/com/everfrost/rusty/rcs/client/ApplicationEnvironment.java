@@ -17,6 +17,7 @@ import android.util.Base64;
 import androidx.annotation.NonNull;
 
 import com.everfrost.rusty.rcs.client.utils.log.LogService;
+import com.everfrost.rusty.rcs.client.RustyRcsClient;
 
 import java.io.IOException;
 import java.net.Inet4Address;
@@ -26,11 +27,14 @@ import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.AlreadyConnectedException;
+import java.nio.channels.CancelledKeyException;
 import java.nio.channels.Channel;
 import java.nio.channels.ClosedChannelException;
 import java.nio.channels.ClosedSelectorException;
 import java.nio.channels.ConnectionPendingException;
 import java.nio.channels.NoConnectionPendingException;
+import java.nio.channels.NonReadableChannelException;
+import java.nio.channels.NonWritableChannelException;
 import java.nio.channels.NotYetConnectedException;
 import java.nio.channels.ReadableByteChannel;
 import java.nio.channels.SelectableChannel;
@@ -72,6 +76,8 @@ public class ApplicationEnvironment {
 
     private Selector socketSelector;
 
+    private static final Object registerLock = new Object();
+
     private static final Executor executor = Executors.newSingleThreadExecutor();
 
     public ApplicationEnvironment(Application application) {
@@ -91,8 +97,11 @@ public class ApplicationEnvironment {
             public void run() {
                 while (true) {
                     try {
+                        synchronized (registerLock) {
+                            LogService.v(LOG_TAG, "synchronizing selector registration");
+                        }
                         LogService.i(LOG_TAG, "socketSelector.select()");
-                        int r = socketSelector.select(1000);
+                        int r = socketSelector.select();
                         LogService.i(LOG_TAG, "socketSelector.select() returns " + r);
                         Set<SelectionKey> selectedKeys = socketSelector.selectedKeys();
                         Iterator<SelectionKey> iterator = selectedKeys.iterator();
@@ -103,51 +112,71 @@ public class ApplicationEnvironment {
                                 Object attachment = key.attachment();
                                 if (attachment instanceof AsyncLatch) {
                                     AsyncLatch asyncLatch = (AsyncLatch) attachment;
-                                    if (key.isConnectable()) {
-                                        LogService.i(LOG_TAG, "key isConnectable");
-                                        asyncLatch.wakeUp();
+                                    try {
+                                        if (key.isConnectable()) {
+                                            LogService.i(LOG_TAG, "key isConnectable");
+                                            asyncLatch.wakeUp();
+                                        }
+                                    } catch (CancelledKeyException e) {
+                                        LogService.w(LOG_TAG, "key is cancelled:", e);
                                     }
                                 }
 
                                 if (attachment instanceof AsyncSocket) {
                                     AsyncSocket asyncSocket = (AsyncSocket) attachment;
-                                    if (key.isReadable()) {
-                                        LogService.i(LOG_TAG, "key isReadable");
-                                        synchronized (asyncSocket.readLatches) {
-                                            Iterator<AsyncLatch> it = asyncSocket.readLatches.iterator();
-                                            while (it.hasNext()) {
-                                                AsyncLatch asyncLatch = it.next();
-                                                asyncLatch.wakeUp();
-                                                it.remove();
-                                            }
-                                        }
-                                    }
-                                    if (key.isWritable()) {
-                                        LogService.i(LOG_TAG, "key isWritable");
-                                        synchronized (asyncSocket.writeLatches) {
-                                            Iterator<AsyncLatch> it = asyncSocket.writeLatches.iterator();
-                                            while (it.hasNext()) {
-                                                AsyncLatch asyncLatch = it.next();
-                                                asyncLatch.wakeUp();
-                                                it.remove();
+
+                                    try {
+                                        if (key.isReadable()) {
+                                            LogService.i(LOG_TAG, "key isReadable");
+                                            synchronized (asyncSocket.readLatches) {
+                                                Iterator<AsyncLatch> it = asyncSocket.readLatches.iterator();
+                                                while (it.hasNext()) {
+                                                    AsyncLatch asyncLatch = it.next();
+                                                    asyncLatch.wakeUp();
+                                                    it.remove();
+                                                }
                                             }
                                         }
 
-                                        key.interestOps(SelectionKey.OP_READ);
+                                        if (key.isWritable()) {
+                                            LogService.i(LOG_TAG, "key isWritable");
+                                            synchronized (asyncSocket.writeLatches) {
+                                                Iterator<AsyncLatch> it = asyncSocket.writeLatches.iterator();
+                                                while (it.hasNext()) {
+                                                    AsyncLatch asyncLatch = it.next();
+                                                    asyncLatch.wakeUp();
+                                                    it.remove();
+                                                }
+                                            }
+
+                                            int ops = key.interestOps();
+                                            ops = ops & (~SelectionKey.OP_WRITE);
+                                            key.interestOps(ops);
+                                        }
+                                    } catch (CancelledKeyException e) {
+                                        LogService.w(LOG_TAG, "key is cancelled:", e);
                                     }
                                 }
 
                                 if (attachment instanceof SocketSSLEngine) {
                                     SocketSSLEngine socketSSLEngine = (SocketSSLEngine) attachment;
-                                    if (key.isReadable()) {
-                                        LogService.i(LOG_TAG, "key isReadable");
-                                        socketSSLEngine.onReadAvailable(key);
-                                    }
-                                    if (key.isWritable()) {
-                                        LogService.i(LOG_TAG, "key isWritable");
-                                        socketSSLEngine.onWriteAvailable(key);
+                                    try {
+                                        if (key.isReadable()) {
+                                            LogService.i(LOG_TAG, "key isReadable");
+                                            socketSSLEngine.onReadAvailable(key);
+                                        }
 
-                                        key.interestOps(SelectionKey.OP_READ);
+                                        if (key.isWritable()) {
+                                            LogService.i(LOG_TAG, "key isWritable");
+                                            boolean allWritten = socketSSLEngine.onWriteAvailable(key);
+                                            if (allWritten) {
+                                                int ops = key.interestOps();
+                                                ops = ops & (~SelectionKey.OP_WRITE);
+                                                key.interestOps(ops);
+                                            }
+                                        }
+                                    } catch (CancelledKeyException e) {
+                                        LogService.w(LOG_TAG, "key is cancelled:", e);
                                     }
                                 }
                             }
@@ -300,7 +329,7 @@ public class ApplicationEnvironment {
     }
 
     private static class AsyncLatch {
-        private final long nativeHandle;
+        private volatile long nativeHandle;
         private AsyncLatch(long nativeHandle) {
             this.nativeHandle = nativeHandle;
         }
@@ -308,6 +337,8 @@ public class ApplicationEnvironment {
         private void wakeUp() {
             if (nativeHandle != 0L) {
                 RustyRcsClient.AsyncLatchHandle.wakeUp(nativeHandle);
+                RustyRcsClient.AsyncLatchHandle.destroy(nativeHandle);
+                nativeHandle = 0L;
             }
         }
 
@@ -316,6 +347,7 @@ public class ApplicationEnvironment {
             super.finalize();
             if (nativeHandle != 0L) {
                 RustyRcsClient.AsyncLatchHandle.destroy(nativeHandle);
+                nativeHandle = 0L;
             }
         }
     }
@@ -332,7 +364,7 @@ public class ApplicationEnvironment {
 
         private final List<AsyncLatch> sslReadLatches = new LinkedList<>();
 
-        private boolean readFailed = false;
+        private boolean readClosed = false;
 
         private final Object writeLock = new Object();
 
@@ -344,7 +376,19 @@ public class ApplicationEnvironment {
 
         private boolean writeFailed = false;
 
+        private boolean shutDownWrite = false;
+
+        private boolean writeCompleted = false;
+
+        private boolean readCompleted = false;
+
+        private final Object shutDownLock = new Object();
+
+        private final List<AsyncLatch> sslShutDownLatches = new LinkedList<>();
+
         private final Object statusLock = new Object();
+
+        private SSLSession sslSession;
 
         private final List<AsyncLatch> sslHandshakeLatches = new LinkedList<>();
 
@@ -364,70 +408,136 @@ public class ApplicationEnvironment {
 
         public void onReadAvailable(SelectionKey key) {
 
-            try {
+            Channel channel = key.channel();
 
-                Channel channel = key.channel();
+            if (channel instanceof ReadableByteChannel) {
 
-                if (channel instanceof ReadableByteChannel) {
+                ReadableByteChannel readableByteChannel = (ReadableByteChannel) channel;
 
-                    ReadableByteChannel readableByteChannel = (ReadableByteChannel) channel;
+                boolean closed = false;
+                boolean failed = false;
 
-                    int read = readableByteChannel.read(readBuffer);
+                int read = 0;
 
-                    LogService.i(LOG_TAG, "read " + read + " bytes from channel");
+                try {
+                    read = readableByteChannel.read(readBuffer);
+                } catch (NonReadableChannelException | IOException e) {
+                    LogService.w(LOG_TAG, "error reading tls socket:", e);
+                    failed = true;
+                }
 
-                    synchronized (readLock) {
+                LogService.i(LOG_TAG, "read " + read + " bytes from channel");
 
-                        int produced = 0;
+                if (read == -1) {
+                    closed = true;
+                }
 
-                        while (readBuffer.position() > 0) {
+                boolean completed = false;
 
-                            SSLEngineResult result = decrypt();
-                            SSLEngineResult.Status status = result.getStatus();
-                            LogService.i(LOG_TAG, "engine->unwrap() result:" + status);
-                            if (status == SSLEngineResult.Status.OK) {
-                                int bytesConsumed = result.bytesConsumed();
-                                int bytesProduced = result.bytesProduced();
-                                LogService.i(LOG_TAG, "bytesConsumed=" + bytesConsumed + ", bytesProduced=" + bytesProduced);
-                                produced += bytesProduced;
-                                if (bytesConsumed > 0 || bytesProduced > 0) {
-                                    continue;
-                                }
-                            }
+                synchronized (readLock) {
 
-                            break;
-                        }
-
-                        LogService.i(LOG_TAG, "ssl engine produced " + produced + " bytes");
-
-                        if (produced > 0) {
-                            Iterator<AsyncLatch> iterator = sslReadLatches.iterator();
-                            while (iterator.hasNext()) {
-                                AsyncLatch asyncLatch = iterator.next();
-                                asyncLatch.wakeUp();
-                                iterator.remove();
-                            }
-                        }
+                    if (closed || failed) {
+                        readClosed = true;
                     }
 
-                    synchronized (statusLock) {
+                    int produced = 0;
+
+                    while (readBuffer.position() > 0) {
+
+                        SSLEngineResult result = decrypt();
+                        SSLEngineResult.Status status = result.getStatus();
+                        LogService.i(LOG_TAG, "engine->unwrap() result:" + status);
+                        if (status == SSLEngineResult.Status.OK) {
+                            SSLEngineResult.HandshakeStatus handshakeStatus = result.getHandshakeStatus();
+                            if (handshakeStatus == SSLEngineResult.HandshakeStatus.FINISHED) {
+                                synchronized (statusLock) {
+                                    sslSession = engine.getSession();
+                                    if (sslSession != null) {
+                                        Iterator<AsyncLatch> iterator = sslHandshakeLatches.iterator();
+                                        while (iterator.hasNext()) {
+                                            AsyncLatch asyncLatch = iterator.next();
+                                            asyncLatch.wakeUp();
+                                            iterator.remove();
+                                        }
+                                    } else {
+                                        LogService.w(LOG_TAG, "ssl handshake finished but cannot retrieve sslSession");
+                                    }
+                                }
+                            }
+                            int bytesConsumed = result.bytesConsumed();
+                            int bytesProduced = result.bytesProduced();
+                            LogService.i(LOG_TAG, "bytesConsumed=" + bytesConsumed + ", bytesProduced=" + bytesProduced);
+                            produced += bytesProduced;
+                            if (bytesConsumed > 0 || bytesProduced > 0) {
+                                continue;
+                            } else if (readClosed) {
+                                try {
+                                    engine.closeInbound();
+                                } catch (SSLException e) {
+                                    LogService.w(LOG_TAG, "ssl socket has not received the proper SSL/TLS close notification message:", e);
+                                } finally {
+                                    completed = true;
+                                }
+                            }
+                        } else if (status == SSLEngineResult.Status.CLOSED) {
+                            completed = true;
+                            int bytesConsumed = result.bytesConsumed();
+                            int bytesProduced = result.bytesProduced();
+                            LogService.i(LOG_TAG, "bytesConsumed=" + bytesConsumed + ", bytesProduced=" + bytesProduced);
+                            produced += bytesProduced;
+                        }
+
+                        break;
+                    }
+
+                    LogService.i(LOG_TAG, "ssl engine produced " + produced + " bytes");
+
+                    if (produced > 0 || readClosed) {
+                        Iterator<AsyncLatch> iterator = sslReadLatches.iterator();
+                        while (iterator.hasNext()) {
+                            AsyncLatch asyncLatch = iterator.next();
+                            asyncLatch.wakeUp();
+                            iterator.remove();
+                        }
+                    }
+                }
+
+                if (!readBuffer.hasRemaining()) {
+                    int ops = key.interestOps();
+                    ops = ops & (~SelectionKey.OP_READ);
+                    key.interestOps(ops);
+                }
+
+                if (completed) {
+                    synchronized (shutDownLock) {
+                        readCompleted = true;
+                        if (closed || failed) {
+                            writeCompleted = true;
+                        }
+                        Iterator<AsyncLatch> iterator = sslShutDownLatches.iterator();
+                        while (iterator.hasNext()) {
+                            AsyncLatch asyncLatch = iterator.next();
+                            asyncLatch.wakeUp();
+                            iterator.remove();
+                        }
+                    }
+                }
+
+                synchronized (statusLock) {
+                    if (sslSession == null) {
                         SSLEngineResult.HandshakeStatus handshakeStatus = engine.getHandshakeStatus();
                         LogService.i(LOG_TAG, "ssl engine handshake status now is " + handshakeStatus);
                         if (handshakeStatus == SSLEngineResult.HandshakeStatus.NOT_HANDSHAKING) {
-                            if (engine.getSession() != null) {
+                            sslSession = engine.getSession();
+                            if (sslSession != null) {
                                 Iterator<AsyncLatch> iterator = sslHandshakeLatches.iterator();
                                 while (iterator.hasNext()) {
                                     AsyncLatch asyncLatch = iterator.next();
                                     asyncLatch.wakeUp();
                                     iterator.remove();
                                 }
-                            }
-                        } else if (handshakeStatus == SSLEngineResult.HandshakeStatus.FINISHED) {
-                            Iterator<AsyncLatch> iterator = sslHandshakeLatches.iterator();
-                            while (iterator.hasNext()) {
-                                AsyncLatch asyncLatch = iterator.next();
-                                asyncLatch.wakeUp();
-                                iterator.remove();
+                            } else {
+                                LogService.w(LOG_TAG, "ssl handshake finished but cannot retrieve sslSession");
                             }
                         } else if (handshakeStatus == SSLEngineResult.HandshakeStatus.NEED_TASK) {
                             LogService.i(LOG_TAG, "ssl need to perform some task");
@@ -451,17 +561,18 @@ public class ApplicationEnvironment {
                             });
 
                         } else if (handshakeStatus == SSLEngineResult.HandshakeStatus.NEED_WRAP) {
-                            key.interestOps(SelectionKey.OP_READ | SelectionKey.OP_WRITE);
+                            int ops = key.interestOps();
+                            ops = ops ^ SelectionKey.OP_WRITE;
+                            key.interestOps(ops);
                         }
                     }
                 }
-
-            } catch (IOException e) {
-                LogService.w(LOG_TAG, "cannot retrieve a readable channel");
             }
         }
 
-        public void onWriteAvailable(SelectionKey key) {
+        public boolean onWriteAvailable(SelectionKey key) {
+
+            boolean allWritten = false;
 
             Channel channel = key.channel();
 
@@ -471,6 +582,8 @@ public class ApplicationEnvironment {
 
                 int consumed = 0;
 
+                boolean completed = false;
+
                 synchronized (writeLock) {
 
                     do {
@@ -479,13 +592,40 @@ public class ApplicationEnvironment {
                         SSLEngineResult.Status status = result.getStatus();
                         LogService.i(LOG_TAG, "engine->wrap() result:" + status);
                         if (status == SSLEngineResult.Status.OK) {
+                            SSLEngineResult.HandshakeStatus handshakeStatus = result.getHandshakeStatus();
+                            if (handshakeStatus == SSLEngineResult.HandshakeStatus.FINISHED) {
+                                synchronized (statusLock) {
+                                    sslSession = engine.getSession();
+                                    if (sslSession != null) {
+                                        Iterator<AsyncLatch> iterator = sslHandshakeLatches.iterator();
+                                        while (iterator.hasNext()) {
+                                            AsyncLatch asyncLatch = iterator.next();
+                                            asyncLatch.wakeUp();
+                                            iterator.remove();
+                                        }
+                                    } else {
+                                        LogService.w(LOG_TAG, "ssl handshake finished but cannot retrieve sslSession");
+                                    }
+                                }
+                            }
                             int bytesConsumed = result.bytesConsumed();
                             int bytesProduced = result.bytesProduced();
                             LogService.i(LOG_TAG, "bytesConsumed=" + bytesConsumed + ", bytesProduced=" + bytesProduced);
                             consumed += bytesConsumed;
                             if (bytesConsumed > 0 || bytesProduced > 0) {
                                 continue;
+                            } else {
+                                if (writeBuffer.position() == 0 && shutDownWrite) {
+                                    engine.closeOutbound();
+                                    continue;
+                                }
                             }
+                        } else if (status == SSLEngineResult.Status.CLOSED) {
+                            completed = true;
+                            int bytesConsumed = result.bytesConsumed();
+                            int bytesProduced = result.bytesProduced();
+                            LogService.i(LOG_TAG, "bytesConsumed=" + bytesConsumed + ", bytesProduced=" + bytesProduced);
+                            consumed += bytesConsumed;
                         }
 
                         break;
@@ -500,8 +640,9 @@ public class ApplicationEnvironment {
                             encrypted.flip();
                             written = writableByteChannel.write(encrypted);
                             LogService.i(LOG_TAG, "write " + written + " bytes to channel");
-                        } catch (IOException e) {
+                        } catch (NonWritableChannelException | IOException e) {
                             LogService.w(LOG_TAG, "error writing tls socket:", e);
+                            writeFailed = true;
                         } finally {
                             encrypted.compact();
                         }
@@ -519,50 +660,66 @@ public class ApplicationEnvironment {
                             iterator.remove();
                         }
                     }
+
+                    if (encrypted.position() == 0) {
+                        allWritten = true;
+                    }
                 }
 
-                synchronized (statusLock) {
-                    SSLEngineResult.HandshakeStatus handshakeStatus = engine.getHandshakeStatus();
-                    LogService.i(LOG_TAG, "ssl engine handshake status now is " + handshakeStatus);
-                    if (handshakeStatus == SSLEngineResult.HandshakeStatus.NOT_HANDSHAKING) {
-                        if (engine.getSession() != null) {
-                            Iterator<AsyncLatch> iterator = sslHandshakeLatches.iterator();
-                            while (iterator.hasNext()) {
-                                AsyncLatch asyncLatch = iterator.next();
-                                asyncLatch.wakeUp();
-                                iterator.remove();
-                            }
-                        }
-                    } else if (handshakeStatus == SSLEngineResult.HandshakeStatus.FINISHED) {
-                        Iterator<AsyncLatch> iterator = sslHandshakeLatches.iterator();
+                if (allWritten && completed) {
+                    synchronized (shutDownLock) {
+                        writeCompleted = true;
+                        Iterator<AsyncLatch> iterator = sslShutDownLatches.iterator();
                         while (iterator.hasNext()) {
                             AsyncLatch asyncLatch = iterator.next();
                             asyncLatch.wakeUp();
                             iterator.remove();
                         }
-                    } else if (handshakeStatus == SSLEngineResult.HandshakeStatus.NEED_TASK) {
-                        LogService.i(LOG_TAG, "ssl need to perform some task");
+                    }
+                }
 
-                        Runnable task = engine.getDelegatedTask();
-
-                        executor.execute(() -> {
-
-                            task.run();
-
-                            LogService.i(LOG_TAG, "ssl task complete");
-
-                            synchronized (statusLock) {
+                synchronized (statusLock) {
+                    if (sslSession == null) {
+                        SSLEngineResult.HandshakeStatus handshakeStatus = engine.getHandshakeStatus();
+                        LogService.i(LOG_TAG, "ssl engine handshake status now is " + handshakeStatus);
+                        if (handshakeStatus == SSLEngineResult.HandshakeStatus.NOT_HANDSHAKING) {
+                            sslSession = engine.getSession();
+                            if (sslSession != null) {
                                 Iterator<AsyncLatch> iterator = sslHandshakeLatches.iterator();
                                 while (iterator.hasNext()) {
                                     AsyncLatch asyncLatch = iterator.next();
                                     asyncLatch.wakeUp();
                                     iterator.remove();
                                 }
+                            } else {
+                                LogService.w(LOG_TAG, "ssl handshake finished but cannot retrieve sslSession");
                             }
-                        });
+                        } else if (handshakeStatus == SSLEngineResult.HandshakeStatus.NEED_TASK) {
+                            LogService.i(LOG_TAG, "ssl need to perform some task");
+
+                            Runnable task = engine.getDelegatedTask();
+
+                            executor.execute(() -> {
+
+                                task.run();
+
+                                LogService.i(LOG_TAG, "ssl task complete");
+
+                                synchronized (statusLock) {
+                                    Iterator<AsyncLatch> iterator = sslHandshakeLatches.iterator();
+                                    while (iterator.hasNext()) {
+                                        AsyncLatch asyncLatch = iterator.next();
+                                        asyncLatch.wakeUp();
+                                        iterator.remove();
+                                    }
+                                }
+                            });
+                        }
                     }
                 }
             }
+
+            return allWritten;
         }
 
         public SSLEngineResult decrypt() {
@@ -589,6 +746,116 @@ public class ApplicationEnvironment {
             }
 
             return null;
+        }
+
+        public int finishHandshake(SelectableChannel selectableChannel, Selector socketSelector, long asyncHandle) {
+
+            synchronized (statusLock) {
+
+                if (sslSession != null) {
+                    RustyRcsClient.AsyncLatchHandle.destroy(asyncHandle);
+
+                    return 0;
+                }
+
+                SSLEngineResult.HandshakeStatus handshakeStatus = engine.getHandshakeStatus();
+
+                LogService.i(LOG_TAG, "ssl engine handshake status is " + handshakeStatus);
+
+                if (handshakeStatus == SSLEngineResult.HandshakeStatus.NOT_HANDSHAKING) {
+                    sslSession = engine.getSession();
+
+                    if (sslSession != null) {
+                        RustyRcsClient.AsyncLatchHandle.destroy(asyncHandle);
+
+                        return 0;
+                    } else {
+                        LogService.w(LOG_TAG, "handshake might not have started");
+                    }
+
+                    AsyncLatch asyncLatch = new AsyncLatch(asyncHandle);
+
+                    sslHandshakeLatches.add(asyncLatch);
+
+                    try {
+                        engine.beginHandshake();
+                    } catch (SSLException | IllegalStateException e) {
+                        LogService.w(LOG_TAG, "error attempting handshake", e);
+                    }
+
+                    return 114; // EALREADY
+                } else if (handshakeStatus == SSLEngineResult.HandshakeStatus.FINISHED) {
+                    sslSession = engine.getSession();
+
+                    RustyRcsClient.AsyncLatchHandle.destroy(asyncHandle);
+
+                    return 0;
+                } else if (handshakeStatus == SSLEngineResult.HandshakeStatus.NEED_TASK) {
+
+                    AsyncLatch asyncLatch = new AsyncLatch(asyncHandle);
+
+                    LogService.i(LOG_TAG, "ssl need to perform some task");
+
+                    Runnable task = engine.getDelegatedTask();
+
+                    executor.execute(() -> {
+
+                        task.run();
+
+                        LogService.i(LOG_TAG, "ssl task complete");
+
+                        asyncLatch.wakeUp();
+                    });
+
+                    return 114; // EALREADY
+
+                } else if (handshakeStatus == SSLEngineResult.HandshakeStatus.NEED_WRAP) {
+
+                    AsyncLatch asyncLatch = new AsyncLatch(asyncHandle);
+
+                    sslHandshakeLatches.add(asyncLatch);
+
+                    synchronized (registerLock) {
+                        socketSelector.wakeup();
+                        try {
+                            SelectionKey selectionKey = selectableChannel.register(socketSelector, SelectionKey.OP_READ | SelectionKey.OP_WRITE, this);
+                            LogService.i(LOG_TAG, "selectableChannel event registered with:" + selectionKey);
+                        } catch (ClosedChannelException | IllegalStateException | IllegalArgumentException e) {
+                            LogService.w(LOG_TAG, "failed to register selectable channel:", e);
+                            return -1;
+                        }
+                    }
+
+                    return 114;
+
+                } else if (handshakeStatus == SSLEngineResult.HandshakeStatus.NEED_UNWRAP) {
+
+                    AsyncLatch asyncLatch = new AsyncLatch(asyncHandle);
+
+                    sslHandshakeLatches.add(asyncLatch);
+
+                    return 114; // EALREADY
+                }
+            }
+
+            RustyRcsClient.AsyncLatchHandle.destroy(asyncHandle);
+
+            return -1;
+        }
+
+        public CipherSuiteCoding getSessionCipherSuite() {
+            synchronized (statusLock) {
+                if (sslSession == null) {
+                    sslSession = engine.getSession();
+                }
+
+                if (sslSession != null) {
+                    String cipherSuite = sslSession.getCipherSuite();
+                    return CipherSuiteCoding.get(cipherSuite);
+                } else {
+                    return null;
+                }
+            }
         }
     }
 
@@ -638,36 +905,49 @@ public class ApplicationEnvironment {
 
         public int finishConnect(long asyncHandle) {
 
-            AsyncLatch asyncLatch = new AsyncLatch(asyncHandle);
-
             try {
                 if (socketChannel.finishConnect()) {
+
+                    RustyRcsClient.AsyncLatchHandle.destroy(asyncHandle);
+
                     if (socketSSLEngine != null) {
-                        try {
-                            SelectionKey selectionKey = selectableChannel.register(socketSelector, SelectionKey.OP_READ, socketSSLEngine);
-                            LogService.i(LOG_TAG, "selectableChannel event registered with:" + selectionKey);
-                        } catch (ClosedChannelException | IllegalStateException | IllegalArgumentException e) {
-                            LogService.w(LOG_TAG, "failed to register selectable channel:", e);
-                            return -1;
+                        synchronized (registerLock) {
+                            socketSelector.wakeup();
+                            try {
+                                SelectionKey selectionKey = selectableChannel.register(socketSelector, SelectionKey.OP_READ, socketSSLEngine);
+                                LogService.i(LOG_TAG, "selectableChannel event registered with:" + selectionKey);
+                            } catch (ClosedChannelException | IllegalStateException | IllegalArgumentException e) {
+                                LogService.w(LOG_TAG, "failed to register selectable channel:", e);
+                                return -1;
+                            }
                         }
                     } else {
-                        try {
-                            SelectionKey selectionKey = selectableChannel.register(socketSelector, SelectionKey.OP_READ, this);
-                            LogService.i(LOG_TAG, "selectableChannel event registered with:" + selectionKey);
-                        } catch (ClosedChannelException | IllegalStateException | IllegalArgumentException e) {
-                            LogService.w(LOG_TAG, "failed to register selectable channel:", e);
-                            return -1;
+                        synchronized (registerLock) {
+                            socketSelector.wakeup();
+                            try {
+                                SelectionKey selectionKey = selectableChannel.register(socketSelector, SelectionKey.OP_READ, this);
+                                LogService.i(LOG_TAG, "selectableChannel event registered with:" + selectionKey);
+                            } catch (ClosedChannelException | IllegalStateException | IllegalArgumentException e) {
+                                LogService.w(LOG_TAG, "failed to register selectable channel:", e);
+                                return -1;
+                            }
                         }
                     }
 
                     return 0;
                 } else {
-                    try {
-                        SelectionKey selectionKey = selectableChannel.register(socketSelector, SelectionKey.OP_CONNECT, asyncLatch);
-                        LogService.i(LOG_TAG, "selectableChannel event registered with:" + selectionKey);
-                    } catch (ClosedChannelException | IllegalStateException | IllegalArgumentException e) {
-                        LogService.w(LOG_TAG, "failed to register selectable channel:", e);
-                        return -1;
+
+                    AsyncLatch asyncLatch = new AsyncLatch(asyncHandle);
+
+                    synchronized (registerLock) {
+                        socketSelector.wakeup();
+                        try {
+                            SelectionKey selectionKey = selectableChannel.register(socketSelector, SelectionKey.OP_CONNECT, asyncLatch);
+                            LogService.i(LOG_TAG, "selectableChannel event registered with:" + selectionKey);
+                        } catch (ClosedChannelException | IllegalStateException | IllegalArgumentException e) {
+                            LogService.w(LOG_TAG, "failed to register selectable channel:", e);
+                            return -1;
+                        }
                     }
 
                     return 114; // EALREADY
@@ -675,6 +955,8 @@ public class ApplicationEnvironment {
             } catch (NoConnectionPendingException | IOException e) {
                 LogService.w(LOG_TAG, "error attempting to finish connection:", e);
             }
+
+            RustyRcsClient.AsyncLatchHandle.destroy(asyncHandle);
 
             return -1;
         }
@@ -700,74 +982,13 @@ public class ApplicationEnvironment {
 
         public int finishHandshake(long asyncHandle) {
 
-            AsyncLatch asyncLatch = new AsyncLatch(asyncHandle);
-
             if (socketSSLEngine != null) {
 
-                synchronized (socketSSLEngine.statusLock) {
-
-                    SSLEngineResult.HandshakeStatus handshakeStatus = socketSSLEngine.engine.getHandshakeStatus();
-
-                    LogService.i(LOG_TAG, "ssl engine handshake status is " + handshakeStatus);
-
-                    if (handshakeStatus == SSLEngineResult.HandshakeStatus.NOT_HANDSHAKING) {
-                        if (socketSSLEngine.engine.getSession() != null) {
-                            return 0;
-                        }
-
-                        socketSSLEngine.sslHandshakeLatches.add(asyncLatch);
-
-                        try {
-                            socketSSLEngine.engine.beginHandshake();
-                        } catch (SSLException | IllegalStateException e) {
-                            LogService.w(LOG_TAG, "error attempting handshake", e);
-                        }
-
-                        return 114; // EALREADY
-                    } else if (handshakeStatus == SSLEngineResult.HandshakeStatus.FINISHED) {
-                        return 0;
-                    } else if (handshakeStatus == SSLEngineResult.HandshakeStatus.NEED_TASK) {
-
-                        LogService.i(LOG_TAG, "ssl need to perform some task");
-
-                        Runnable task = socketSSLEngine.engine.getDelegatedTask();
-
-                        executor.execute(() -> {
-
-                            task.run();
-
-                            LogService.i(LOG_TAG, "ssl task complete");
-
-                            asyncLatch.wakeUp();
-                        });
-
-                        return 114; // EALREADY
-
-                    } else if (handshakeStatus == SSLEngineResult.HandshakeStatus.NEED_WRAP) {
-
-                        socketSSLEngine.sslHandshakeLatches.add(asyncLatch);
-
-                        try {
-                            SelectionKey selectionKey = selectableChannel.register(socketSelector, SelectionKey.OP_READ | SelectionKey.OP_WRITE, socketSSLEngine);
-                            LogService.i(LOG_TAG, "selectableChannel event registered with:" + selectionKey);
-                        } catch (ClosedChannelException | IllegalStateException | IllegalArgumentException e) {
-                            LogService.w(LOG_TAG, "failed to register selectable channel:", e);
-                            return -1;
-                        }
-
-                        return 114;
-
-                    } else if (handshakeStatus == SSLEngineResult.HandshakeStatus.NEED_UNWRAP) {
-
-                        socketSSLEngine.sslHandshakeLatches.add(asyncLatch);
-
-                        return 114; // EALREADY
-                    }
-                }
-
-                return -1;
+                return socketSSLEngine.finishHandshake(selectableChannel, socketSelector, asyncHandle);
 
             } else {
+
+                RustyRcsClient.AsyncLatchHandle.destroy(asyncHandle);
 
                 return 0;
             }
@@ -777,15 +998,11 @@ public class ApplicationEnvironment {
 
             LogService.i(LOG_TAG, "read max " + bytes.length + " bytes");
 
-            AsyncLatch asyncLatch = new AsyncLatch(asyncHandle);
-
             if (socketSSLEngine != null) {
 
                 int read;
 
                 synchronized (socketSSLEngine.readLock) {
-
-                    // TODO: 2023/11/10 read everything
 
                     socketSSLEngine.decrypted.flip();
 
@@ -816,7 +1033,30 @@ public class ApplicationEnvironment {
                     LogService.i(LOG_TAG, "decrypted read:" + read);
 
                     if (read == 0) {
+                        if (socketSSLEngine.readClosed) {
+                            RustyRcsClient.AsyncLatchHandle.destroy(asyncHandle);
+
+                            return -1;
+                        }
+
+                        AsyncLatch asyncLatch = new AsyncLatch(asyncHandle);
+
                         socketSSLEngine.sslReadLatches.add(asyncLatch);
+                    } else {
+                        RustyRcsClient.AsyncLatchHandle.destroy(asyncHandle);
+                    }
+                }
+
+                if (read > 0) {
+                    synchronized (registerLock) {
+                        socketSelector.wakeup();
+                        try {
+                            SelectionKey selectionKey = selectableChannel.register(socketSelector, SelectionKey.OP_READ | SelectionKey.OP_WRITE, socketSSLEngine);
+                            LogService.i(LOG_TAG, "selectableChannel event registered with:" + selectionKey);
+                        } catch (ClosedChannelException | IllegalStateException | IllegalArgumentException e) {
+                            LogService.w(LOG_TAG, "failed to register selectable channel:", e);
+                            return -1;
+                        }
                     }
                 }
 
@@ -842,11 +1082,17 @@ public class ApplicationEnvironment {
 
                     LogService.w(LOG_TAG, "error reading socket:", e);
 
+                    RustyRcsClient.AsyncLatchHandle.destroy(asyncHandle);
+
                     return -1;
                 }
 
                 if (read == 0) {
+                    AsyncLatch asyncLatch = new AsyncLatch(asyncHandle);
+
                     readLatches.add(asyncLatch);
+                } else {
+                    RustyRcsClient.AsyncLatchHandle.destroy(asyncHandle);
                 }
 
                 return read;
@@ -856,8 +1102,6 @@ public class ApplicationEnvironment {
         public int write(byte[] bytes, long asyncHandle) {
 
             LogService.i(LOG_TAG, "write " + bytes.length + " bytes");
-
-            AsyncLatch asyncLatch = new AsyncLatch(asyncHandle);
 
             if (socketSSLEngine != null) {
 
@@ -887,15 +1131,22 @@ public class ApplicationEnvironment {
                 }
 
                 if (written == 0) {
+                    AsyncLatch asyncLatch = new AsyncLatch(asyncHandle);
+
                     socketSSLEngine.sslWriteLatches.add(asyncLatch);
+                } else {
+                    RustyRcsClient.AsyncLatchHandle.destroy(asyncHandle);
                 }
 
-                try {
-                    SelectionKey selectionKey = selectableChannel.register(socketSelector, SelectionKey.OP_READ | SelectionKey.OP_WRITE, socketSSLEngine);
-                    LogService.i(LOG_TAG, "selectableChannel event registered with:" + selectionKey);
-                } catch (ClosedChannelException | IllegalStateException | IllegalArgumentException e) {
-                    LogService.w(LOG_TAG, "failed to register selectable channel:", e);
-                    return -1;
+                synchronized (registerLock) {
+                    socketSelector.wakeup();
+                    try {
+                        SelectionKey selectionKey = selectableChannel.register(socketSelector, SelectionKey.OP_READ | SelectionKey.OP_WRITE, socketSSLEngine);
+                        LogService.i(LOG_TAG, "selectableChannel event registered with:" + selectionKey);
+                    } catch (ClosedChannelException | IllegalStateException | IllegalArgumentException e) {
+                        LogService.w(LOG_TAG, "failed to register selectable channel:", e);
+                        return -1;
+                    }
                 }
 
                 return written;
@@ -920,43 +1171,101 @@ public class ApplicationEnvironment {
 
                     LogService.w(LOG_TAG, "error writing socket:", e);
 
+                    RustyRcsClient.AsyncLatchHandle.destroy(asyncHandle);
+
                     return -1;
                 }
 
                 if (written == 0) {
+                    AsyncLatch asyncLatch = new AsyncLatch(asyncHandle);
+
                     writeLatches.add(asyncLatch);
 
-                    try {
-                        SelectionKey selectionKey = selectableChannel.register(socketSelector, SelectionKey.OP_READ | SelectionKey.OP_WRITE, this);
-                        LogService.i(LOG_TAG, "selectableChannel event registered with:" + selectionKey);
-                    } catch (ClosedChannelException | IllegalStateException | IllegalArgumentException e) {
-                        LogService.w(LOG_TAG, "failed to register selectable channel:", e);
-                        return -1;
+                    synchronized (registerLock) {
+                        socketSelector.wakeup();
+                        try {
+                            SelectionKey selectionKey = selectableChannel.register(socketSelector, SelectionKey.OP_READ | SelectionKey.OP_WRITE, this);
+                            LogService.i(LOG_TAG, "selectableChannel event registered with:" + selectionKey);
+                        } catch (ClosedChannelException | IllegalStateException | IllegalArgumentException e) {
+                            LogService.w(LOG_TAG, "failed to register selectable channel:", e);
+                            return -1;
+                        }
                     }
+                } else {
+                    RustyRcsClient.AsyncLatchHandle.destroy(asyncHandle);
                 }
 
                 return written;
             }
         }
 
-        public int close() {
+        public int shutDown(long asyncHandle) {
+
+            if (socketSSLEngine != null) {
+
+                synchronized (socketSSLEngine.shutDownLock) {
+
+                    if (socketSSLEngine.writeCompleted && socketSSLEngine.readCompleted) {
+                        RustyRcsClient.AsyncLatchHandle.destroy(asyncHandle);
+
+                        return 0;
+                    }
+                }
+
+                boolean writeCompleted;
+
+                synchronized (socketSSLEngine.writeLock) {
+
+                    socketSSLEngine.shutDownWrite = true;
+
+                    writeCompleted = socketSSLEngine.writeCompleted;
+
+                    AsyncLatch asyncLatch = new AsyncLatch(asyncHandle);
+
+                    socketSSLEngine.sslShutDownLatches.add(asyncLatch);
+                }
+
+                if (!writeCompleted) {
+                    synchronized (registerLock) {
+                        socketSelector.wakeup();
+                        try {
+                            SelectionKey selectionKey = selectableChannel.register(socketSelector, SelectionKey.OP_READ | SelectionKey.OP_WRITE, socketSSLEngine);
+                            LogService.i(LOG_TAG, "selectableChannel event registered with:" + selectionKey);
+                        } catch (ClosedChannelException | IllegalStateException | IllegalArgumentException e) {
+                            LogService.w(LOG_TAG, "failed to register selectable channel:", e);
+                            return -1;
+                        }
+                    }
+                }
+
+                return 114;
+
+            } else {
+                RustyRcsClient.AsyncLatchHandle.destroy(asyncHandle);
+
+                return 0;
+            }
+        }
+
+        public void close() {
 
             try {
 
-                // TODO: 2023/11/12 close inBound outBound data and flush
-
-                socketChannel.register(socketSelector, 0);
+                synchronized (registerLock) {
+                    socketSelector.wakeup();
+                    SelectionKey key = socketChannel.keyFor(socketSelector);
+                    if (key != null) {
+                        key.cancel();;
+                    }
+                }
 
                 socketChannel.close();
-
-                return 0;
 
             } catch (IOException e) {
 
                 LogService.w(LOG_TAG, "error closing socket:", e);
             }
 
-            return - 1;
         }
 
         public static class SocketInfo {
@@ -1001,11 +1310,7 @@ public class ApplicationEnvironment {
 
         private CipherSuiteCoding getSessionCipherSuite() {
             if (socketSSLEngine != null) {
-                synchronized (socketSSLEngine.statusLock) {
-                    SSLSession sslSession = socketSSLEngine.engine.getSession();
-                    String cipherSuite = sslSession.getCipherSuite();
-                    return CipherSuiteCoding.get(cipherSuite);
-                }
+                return socketSSLEngine.getSessionCipherSuite();
             }
             return null;
         }
