@@ -90,17 +90,26 @@ public class RustyRcsClient {
 
     public static native void sendImdnReport(long nativeHandle, String imdnContent, String senderUri, int senderServiceType, long senderSessionNativeHandle, SendImdnReportCallback callback);
 
+    public interface UploadFileProgressCallback {
+
+        void onProgress(int current, int total);
+    }
     public interface UploadFileResultCallback {
         void onResult(int statusCode, String reasonPhrase, String resultXml);
     }
 
-    public static native void uploadFile(long nativeHandle, @NonNull String tid, @NonNull String filePath, @NonNull String fileName, @NonNull String fileMime, @Nullable String fileHash, @Nullable String thumbnailPath, @Nullable String thumbnailName, @Nullable String thumbnailMime, @Nullable String thumbnailHash, UploadFileResultCallback callback);
+    public static native void uploadFile(long nativeHandle, @NonNull String tid, @NonNull String filePath, @NonNull String fileName, @NonNull String fileMime, @Nullable String fileHash, @Nullable String thumbnailPath, @Nullable String thumbnailName, @Nullable String thumbnailMime, @Nullable String thumbnailHash, UploadFileProgressCallback progressCallback, UploadFileResultCallback resultCallback);
+
+    public interface DownloadFileProgressCallback {
+
+        void onProgress(int current, int total);
+    }
 
     public interface DownloadFileResultCallback {
         void onResult(int statusCode, String reasonPhrase);
     }
 
-    public static native void downloadFile(long nativeHandle, String dataUrl, String destinationPath, int start, int total, DownloadFileResultCallback callback);
+    public static native void downloadFile(long nativeHandle, String dataUrl, String destinationPath, int start, int total, DownloadFileProgressCallback progressCallback, DownloadFileResultCallback resultCallback);
 
     public interface CreateMultiConferenceV1ResultCallback {
         void onResult(long nativeHandle /* MultiConferenceV1 */, byte[] answerSdp);

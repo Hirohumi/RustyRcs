@@ -106,6 +106,10 @@ extern void rcs_client_send_imdn_report(struct rcs_runtime *runtime, struct rcs_
                                 const char *imdn_content, const char *sender_uri, int sender_service_type, struct rcs_messaging_session *session,
                                 send_imdn_report_result_callback callback, void *context);
 
+typedef void (*upload_file_progress_callback) (uint32_t current, int32_t total, void *context);
+
+void upload_file_progress_callback_context_release(void *context);
+
 typedef void (*upload_file_result_callback) (uint16_t status_code, const char *reason_phrase, const char *result_xml, void *context);
 
 void upload_file_result_callback_context_release(void *context);
@@ -113,7 +117,12 @@ void upload_file_result_callback_context_release(void *context);
 extern void rcs_client_upload_file(struct rcs_runtime *runtime, struct rcs_client *client, const char *tid,
                                 const char *file_path, const char *file_name, const char *file_mime, const char *file_hash,
                                 const char *thumbnail_path, const char *thumbnail_name, const char *thumbnail_mime, const char *thumbnail_hash,
-                                upload_file_result_callback cb, void *context);
+                                upload_file_progress_callback progress_cb, void* progress_cb_context,
+                                upload_file_result_callback result_cb, void *result_cb_context);
+
+typedef void (*download_file_progress_callback) (uint32_t current, int32_t total, void *context);
+
+void download_file_progress_callback_context_release(void *context);
 
 typedef void (*download_file_result_callback) (uint16_t status_code, const char *reason_phrase, void *context);
 
@@ -121,7 +130,8 @@ void download_file_result_callback_context_release(void *context);
 
 extern void rcs_client_download_file(struct rcs_runtime *runtime, struct rcs_client *client,
                                 const char *file_uri, const char *download_path, uint32_t start, int32_t total,
-                                download_file_result_callback cb, void *context);
+                                download_file_progress_callback progress_cb, void* progress_cb_context,
+                                download_file_result_callback result_cb, void *result_cb_context);
 
 extern void destroy_rcs_messaging_session(struct rcs_messaging_session *session);
 

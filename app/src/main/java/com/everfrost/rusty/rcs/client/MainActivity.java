@@ -33,6 +33,7 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
 
 import com.everfrost.rusty.rcs.client.model.ChatbotSearchResultJson;
+import com.everfrost.rusty.rcs.client.utils.log.LogService;
 import com.google.gson.Gson;
 import com.google.gson.JsonIOException;
 import com.google.gson.JsonSyntaxException;
@@ -334,7 +335,7 @@ public class MainActivity extends AppCompatActivity {
 
                 } else {
 
-                    temporaryDirectory = new File(getFilesDir(), "Rusty/Rcs" + File.separator + "");
+                    temporaryDirectory = new File(getFilesDir(), "Rusty/Rcs" + File.separator);
                 }
 
                 temporaryDirectory.mkdirs();
@@ -365,6 +366,7 @@ public class MainActivity extends AppCompatActivity {
 
                 } catch (IOException e) {
 
+                    LogService.w(TAG, "cannot read embedded test image:", e);
                 }
 
                 File thumb = new File(temporaryDirectory, "test_thumbnail.png");
@@ -393,6 +395,7 @@ public class MainActivity extends AppCompatActivity {
 
                 } catch (IOException e) {
 
+                    LogService.w(TAG, "cannot read embedded test thumbnail:", e);
                 }
 
                 String filePath = file.toString();
@@ -402,7 +405,7 @@ public class MainActivity extends AppCompatActivity {
                     if (fileUploadTid == null) {
                         fileUploadTid = UUID.randomUUID().toString();
                     }
-                    RustyRcsClient.uploadFile(nativeClient, fileUploadTid, filePath, "a.jpeg", "image/png", null, thumbPath, "b.jpeg", "image/png", null, (statusCode, reasonPhrase, resultXml) -> {
+                    RustyRcsClient.uploadFile(nativeClient, fileUploadTid, filePath, "a.jpeg", "image/png", null, thumbPath, "b.jpeg", "image/png", null, (current, total) -> Log.i(TAG, "RustyRcsClient.uploadFile()->onProgress: " + current + "/" + total), (statusCode, reasonPhrase, resultXml) -> {
                         Log.i(TAG, "RustyRcsClient.uploadFile()->onResult: " + statusCode + " " + reasonPhrase);
                         Log.i(TAG, "resultXml: " + resultXml);
                         runOnUiThread(() -> {
@@ -490,7 +493,7 @@ public class MainActivity extends AppCompatActivity {
 
                 String filePath = file.toString();
 
-                runOnUiThread(() -> RustyRcsClient.downloadFile(nativeClient, lastUploadedFileUrl, filePath, 0, 70117, (statusCode, reasonPhrase) -> Log.i(TAG, "RustyRcsClient.downloadFile()->onResult: " + statusCode + " " + reasonPhrase)));
+                runOnUiThread(() -> RustyRcsClient.downloadFile(nativeClient, lastUploadedFileUrl, filePath, 0, 70117, (current, total) -> Log.i(TAG, "RustyRcsClient.uploadFile()->onProgress: " + current + "/" + total), (statusCode, reasonPhrase) -> Log.i(TAG, "RustyRcsClient.downloadFile()->onResult: " + statusCode + " " + reasonPhrase)));
             }
         }.start();
     }

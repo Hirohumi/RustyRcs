@@ -54,7 +54,15 @@ struct send_imdn_report_result_callback_context {
     jobject obj;
 };
 
+struct upload_file_progress_callback_context {
+    jobject obj;
+};
+
 struct upload_file_result_callback_context {
+    jobject obj;
+};
+
+struct download_file_progress_callback_context {
     jobject obj;
 };
 
@@ -105,7 +113,11 @@ static jmethodID message_result_callback_method_id = nullptr;
 
 static jmethodID send_imdn_report_result_callback_method_id = nullptr;
 
+static jmethodID upload_file_progress_callback_method_id = nullptr;
+
 static jmethodID upload_file_result_callback_method_id = nullptr;
+
+static jmethodID download_file_progress_callback_method_id = nullptr;
 
 static jmethodID download_file_result_callback_method_id = nullptr;
 
@@ -168,11 +180,21 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *jvm, void *reserved)
 
     send_imdn_report_result_callback_method_id = env->GetMethodID(send_imdn_report_callback_interface_class, "onResult", "(ILjava/lang/String;)V");
 
+    jclass upload_file_progress_callback_interface_class = env->FindClass("com/everfrost/rusty/rcs/client/RustyRcsClient$UploadFileProgressCallback");
+
+    upload_file_progress_callback_method_id = env->GetMethodID(upload_file_progress_callback_interface_class, "onProgress",
+                                                             "(II)V");
+
     jclass upload_file_result_callback_interface_class = env->FindClass("com/everfrost/rusty/rcs/client/RustyRcsClient$UploadFileResultCallback");
 
     upload_file_result_callback_method_id = env->GetMethodID(upload_file_result_callback_interface_class, "onResult",
                                                              "(ILjava/lang/String;Ljava/lang/String;)V");
 
+    jclass download_file_progress_callback_interface_class = env->FindClass("com/everfrost/rusty/rcs/client/RustyRcsClient$DownloadFileProgressCallback");
+
+    download_file_progress_callback_method_id = env->GetMethodID(download_file_progress_callback_interface_class, "onProgress",
+                                                               "(II)V");
+    
     jclass download_file_result_callback_interface_class = env->FindClass("com/everfrost/rusty/rcs/client/RustyRcsClient$DownloadFileResultCallback");
 
     download_file_result_callback_method_id = env->GetMethodID(download_file_result_callback_interface_class, "onResult",
@@ -471,6 +493,31 @@ static void send_imdn_report_result_callback_impl(uint16_t status_code, const ch
     }
 }
 
+void upload_file_progress_callback_context_release(void *context)
+{
+    __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, "on upload_file_progress_callback_context_release: %p\n", context);
+    auto callbackContext = reinterpret_cast<struct upload_file_progress_callback_context *>(context);
+    if (callbackContext) {
+        JNIEnv *env = ensure_jni_env();
+        if (env) {
+            env->DeleteGlobalRef(callbackContext->obj);
+        }
+        free(callbackContext);
+    }
+}
+
+static void upload_file_progress_callback_impl(uint32_t current, int32_t total, void *context)
+{
+    __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, "on upload_file_progress_callback_impl %d %d\n", current, total);
+    auto callbackContext = reinterpret_cast<struct upload_file_progress_callback_context *>(context);
+    if (callbackContext) {
+        JNIEnv *env = ensure_jni_env();
+        if (env) {
+            env->CallVoidMethod(callbackContext->obj, upload_file_progress_callback_method_id, static_cast<jint>(current), total);
+        }
+    }
+}
+
 void upload_file_result_callback_context_release(void *context)
 {
     __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, "on upload_file_result_callback_context_release: %p\n", context);
@@ -499,6 +546,31 @@ static void upload_file_result_callback_impl(uint16_t status_code, const char *r
             }
 
             env->CallVoidMethod(callbackContext->obj, upload_file_result_callback_method_id, status_code, reason_phrase_string, xmlString);
+        }
+    }
+}
+
+void download_file_progress_callback_context_release(void *context)
+{
+    __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, "on download_file_progress_callback_context_release: %p\n", context);
+    auto callbackContext = reinterpret_cast<struct download_file_progress_callback_context *>(context);
+    if (callbackContext) {
+        JNIEnv *env = ensure_jni_env();
+        if (env) {
+            env->DeleteGlobalRef(callbackContext->obj);
+        }
+        free(callbackContext);
+    }
+}
+
+static void download_file_progress_callback_impl(uint32_t current, int32_t total, void *context)
+{
+    __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, "on download_file_progress_callback_impl %d %d\n", current, total);
+    auto callbackContext = reinterpret_cast<struct download_file_progress_callback_context *>(context);
+    if (callbackContext) {
+        JNIEnv *env = ensure_jni_env();
+        if (env) {
+            env->CallVoidMethod(callbackContext->obj, download_file_progress_callback_method_id, static_cast<jint>(current), total);
         }
     }
 }
@@ -946,11 +1018,16 @@ Java_com_everfrost_rusty_rcs_client_RustyRcsClient_uploadFile(JNIEnv *env, jclas
                                                               jstring thumbnail_name,
                                                               jstring thumbnail_mime,
                                                               jstring thumbnail_hash,
-                                                              jobject callback) {
+                                                              jobject progress_callback,
+                                                              jobject result_callback) {
 
-    auto *callbackContext = static_cast<struct upload_file_result_callback_context *>(calloc(1, sizeof(struct upload_file_result_callback_context)));
+    auto *progressCallbackContext = static_cast<struct upload_file_progress_callback_context *>(calloc(1, sizeof(struct upload_file_progress_callback_context)));
 
-    callbackContext->obj = env->NewGlobalRef(callback);
+    progressCallbackContext->obj = env->NewGlobalRef(progress_callback);
+
+    auto *resultCallbackContext = static_cast<struct upload_file_result_callback_context *>(calloc(1, sizeof(struct upload_file_result_callback_context)));
+
+    resultCallbackContext->obj = env->NewGlobalRef(result_callback);
 
     auto *nativeHandle = reinterpret_cast<struct rcs_client_handle *>(native_handle);
     if (nativeHandle) {
@@ -984,7 +1061,8 @@ Java_com_everfrost_rusty_rcs_client_RustyRcsClient_uploadFile(JNIEnv *env, jclas
         rcs_client_upload_file(runtime, nativeHandle->client, tid_utf8,
                                file_path_utf8, file_name_utf8, file_mime_utf8, file_hash_utf8,
                                thumbnail_path_utf8, thumbnail_name_utf8, thumbnail_mime_utf8, thumbnail_hash_utf8,
-                               upload_file_result_callback_impl, callbackContext);
+                               upload_file_progress_callback_impl, progressCallbackContext,
+                               upload_file_result_callback_impl, resultCallbackContext);
 
         env->ReleaseStringUTFChars(tid, tid_utf8);
         env->ReleaseStringUTFChars(file_path, file_path_utf8);
@@ -1017,18 +1095,23 @@ Java_com_everfrost_rusty_rcs_client_RustyRcsClient_downloadFile(JNIEnv *env, jcl
                                                                 jstring destination_path,
                                                                 int start,
                                                                 int total,
-                                                                jobject callback) {
+                                                                jobject progress_callback,
+                                                                jobject result_callback) {
 
-    auto *callbackContext = static_cast<struct download_file_result_callback_context *>(calloc(1, sizeof(struct download_file_result_callback_context)));
+    auto *progressCallbackContext = static_cast<struct download_file_progress_callback_context *>(calloc(1, sizeof(struct download_file_progress_callback_context)));
 
-    callbackContext->obj = env->NewGlobalRef(callback);
+    progressCallbackContext->obj = env->NewGlobalRef(result_callback);
+
+    auto *resultCallbackContext = static_cast<struct download_file_result_callback_context *>(calloc(1, sizeof(struct download_file_result_callback_context)));
+
+    resultCallbackContext->obj = env->NewGlobalRef(result_callback);
 
     auto *nativeHandle = reinterpret_cast<struct rcs_client_handle *>(native_handle);
     if (nativeHandle) {
         const char *data_url_utf8 = env->GetStringUTFChars(data_url, nullptr);
         const char *destination_path_utf8 = env->GetStringUTFChars(destination_path, nullptr);
 
-        rcs_client_download_file(runtime, nativeHandle->client, data_url_utf8, destination_path_utf8, start, total, download_file_result_callback_impl, callbackContext);
+        rcs_client_download_file(runtime, nativeHandle->client, data_url_utf8, destination_path_utf8, start, total, download_file_progress_callback_impl, progressCallbackContext, download_file_result_callback_impl, resultCallbackContext);
 
         env->ReleaseStringUTFChars(data_url, data_url_utf8);
         env->ReleaseStringUTFChars(destination_path, destination_path_utf8);

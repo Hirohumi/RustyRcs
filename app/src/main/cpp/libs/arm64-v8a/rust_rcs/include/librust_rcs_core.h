@@ -51,7 +51,7 @@ void platform_drop_dns_info(struct dns_info *c_handle);
 
 void platform_drop_network_info(struct network_info *c_handle);
 
-// linxu sock
+// linux sock
 socklen_t platform_get_inaddr_any(struct sockaddr_storage *c_struct);
 socklen_t platform_get_in6addr_any(struct sockaddr_storage *c_struct);
 char *platform_ntop(int af, struct sockaddr_storage c_struct);
