@@ -17,7 +17,6 @@ import android.util.Base64;
 import androidx.annotation.NonNull;
 
 import com.everfrost.rusty.rcs.client.utils.log.LogService;
-import com.everfrost.rusty.rcs.client.RustyRcsClient;
 
 import java.io.IOException;
 import java.net.Inet4Address;
@@ -867,21 +866,67 @@ public class ApplicationEnvironment {
 
         private final SelectableChannel selectableChannel;
 
-        private final SocketSSLEngine socketSSLEngine;
-
         private final List<AsyncLatch> readLatches = Collections.synchronizedList(new LinkedList<>());
 
         private final List<AsyncLatch> writeLatches = Collections.synchronizedList(new LinkedList<>());
 
-        private AsyncSocket(Selector socketSelector, SocketChannel socketChannel, SelectableChannel selectableChannel, SocketSSLEngine socketSSLEngine) {
+        private SocketSSLEngine socketSSLEngine;
+
+        private AsyncSocket(Selector socketSelector, SocketChannel socketChannel, SelectableChannel selectableChannel) {
 
             this.socketSelector = socketSelector;
 
             this.socketChannel = socketChannel;
 
             this.selectableChannel = selectableChannel;
+        }
 
-            this.socketSSLEngine = socketSSLEngine;
+        public int bind(String localAddress, int localPort) {
+
+            try {
+
+                InetSocketAddress socketAddress;
+
+                if ("0.0.0.0".equals(localAddress) || "::".equals(localAddress) || "localhost".equals(localAddress)) {
+                    socketAddress = new InetSocketAddress(localPort);
+                } else {
+                    InetAddress inetAddress = InetAddress.getByName(localAddress);
+                    socketAddress = new InetSocketAddress(inetAddress, localPort);
+                }
+
+                this.socketChannel.bind(socketAddress);
+
+                return 0;
+
+            } catch (IOException e) {
+                LogService.w(LOG_TAG, "failed to bind socket address:", e);
+            }
+
+            return -1;
+        }
+
+        public int setupTls(String hostName) {
+
+            SSLEngine engine;
+
+            try {
+
+                engine = SSLContext.getDefault().createSSLEngine();
+                engine.setUseClientMode(true);
+                SSLParameters sslParameters = new SSLParameters();
+                SNIServerName sniServerName = new SNIHostName(hostName);
+                sslParameters.setServerNames(Collections.singletonList(sniServerName));
+                engine.setSSLParameters(sslParameters);
+            } catch (IllegalStateException | IllegalArgumentException | NoSuchAlgorithmException e) {
+                LogService.w(LOG_TAG, "failed to configure ssl engine:", e);
+                return -1;
+            }
+
+            LogService.i(LOG_TAG, "configured ssl engine");
+
+            this.socketSSLEngine = new SocketSSLEngine(engine);
+
+            return 0;
         }
 
         public int connect(String remoteHost, int remotePort) {
@@ -1308,7 +1353,7 @@ public class ApplicationEnvironment {
             return null;
         }
 
-        private CipherSuiteCoding getSessionCipherSuite() {
+        public CipherSuiteCoding getSessionCipherSuite() {
             if (socketSSLEngine != null) {
                 return socketSSLEngine.getSessionCipherSuite();
             }
@@ -1316,9 +1361,9 @@ public class ApplicationEnvironment {
         }
     }
 
-    public AsyncSocket createSocket(boolean useTLS, String hostName) {
+    public AsyncSocket createSocket() {
 
-        LogService.i(LOG_TAG, "createSocket with TLS enabled:" + useTLS + ", hostName=" + hostName);
+        LogService.i(LOG_TAG, "createSocket");
 
         try {
 
@@ -1330,38 +1375,12 @@ public class ApplicationEnvironment {
 
                 SelectableChannel selectableChannel = socketChannel.configureBlocking(false);
 
-                LogService.i(LOG_TAG, "configureBlocking:false with:" + selectableChannel);
+                LogService.i(LOG_TAG, "configureBlocking=>false for channel:" + selectableChannel);
 
-                if (useTLS) {
-
-                    SSLEngine engine;
-
-                    try {
-
-                        engine = SSLContext.getDefault().createSSLEngine();
-                        engine.setUseClientMode(true);
-                        SSLParameters sslParameters = new SSLParameters();
-                        SNIServerName sniServerName = new SNIHostName(hostName);
-                        sslParameters.setServerNames(Collections.singletonList(sniServerName));
-                        engine.setSSLParameters(sslParameters);
-                    } catch (IllegalStateException | IllegalArgumentException e) {
-                        LogService.w(LOG_TAG, "failed to configure ssl engine:", e);
-                        return null;
-                    }
-
-                    LogService.i(LOG_TAG, "configured ssl engine");
-
-                    SocketSSLEngine socketSSLEngine = new SocketSSLEngine(engine);
-
-                    return new AsyncSocket(socketSelector, socketChannel, selectableChannel, socketSSLEngine);
-
-                } else {
-
-                    return new AsyncSocket(socketSelector, socketChannel, selectableChannel, null);
-                }
+                return new AsyncSocket(socketSelector, socketChannel, selectableChannel);
             }
 
-        } catch (IOException | NoSuchAlgorithmException e) {
+        } catch (IOException e) {
 
             LogService.w(LOG_TAG, "error creating socket:", e);
         }

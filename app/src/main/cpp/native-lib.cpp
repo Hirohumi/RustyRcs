@@ -6,6 +6,7 @@
 extern "C" {
 #include "librust_rcs_client.h"
 #include "librust_rcs_core.h"
+#include "librust_rcs_core_ffi_android.h"
 }
 
 #include <pthread.h>
@@ -1336,6 +1337,10 @@ static jmethodID dns_info_get_server_address_method_id = nullptr;
 
 static jmethodID create_socket_method_id = nullptr;
 
+static jmethodID socket_bind_method_id = nullptr;
+
+static jmethodID socket_configure_tls_method_id = nullptr;
+
 static jmethodID socket_connect_method_id = nullptr;
 
 static jmethodID socket_finish_connect_method_id = nullptr;
@@ -1396,9 +1401,13 @@ Java_com_everfrost_rusty_rcs_client_ApplicationEnvironment_registerHostEnvironme
     dns_info_get_server_address_method_id = env->GetMethodID(dnsInfoClass, "getNextServerAddress", "()Ljava/lang/String;");
 
     create_socket_method_id = env->GetMethodID(clazz, "createSocket",
-                                               "(ZLjava/lang/String;)Lcom/everfrost/rusty/rcs/client/ApplicationEnvironment$AsyncSocket;");
+                                               "()Lcom/everfrost/rusty/rcs/client/ApplicationEnvironment$AsyncSocket;");
 
     jclass socketClass = env->FindClass("com/everfrost/rusty/rcs/client/ApplicationEnvironment$AsyncSocket");
+
+    socket_bind_method_id = env->GetMethodID(socketClass, "bind", "(Ljava/lang/String;I)I");
+
+    socket_configure_tls_method_id = env->GetMethodID(socketClass, "setupTls", "(Ljava/lang/String;)I");
 
     socket_connect_method_id = env->GetMethodID(socketClass, "connect", "(Ljava/lang/String;I)I");
 
@@ -1642,16 +1651,14 @@ struct platform_socket {
     jobject obj;
 };
 
-struct platform_socket *platform_create_socket(bool use_tls, const char *host_name) {
+struct platform_socket *platform_create_socket() {
 
     __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, "platform_create_socket\n");
 
     JNIEnv *env = ensure_jni_env();
     if (env) {
 
-        jstring hostName = env->NewStringUTF(host_name);
-
-        jobject r = env->CallObjectMethod(host_environment, create_socket_method_id, use_tls, hostName);
+        jobject r = env->CallObjectMethod(host_environment, create_socket_method_id);
 
         __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, "createSocket() returns %p\n", r);
 
@@ -1665,6 +1672,44 @@ struct platform_socket *platform_create_socket(bool use_tls, const char *host_na
     }
 
     return nullptr;
+}
+
+int platform_socket_bind(struct platform_socket *sock, const char *l_addr, uint16_t l_port) {
+
+    __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, "platform_socket_bind\n");
+
+    JNIEnv *env = ensure_jni_env();
+    if (env) {
+
+        jstring localAddress = env->NewStringUTF(l_addr);
+
+        jint r = env->CallIntMethod(sock->obj, socket_bind_method_id, localAddress, l_port);
+
+        __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, "setupTls() returns %d\n", r);
+
+        return r;
+    }
+
+    return EINVAL;
+}
+
+int platform_socket_configure_tls(struct platform_socket *sock, const char *host_name) {
+
+    __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, "platform_socket_configure_tls\n");
+
+    JNIEnv *env = ensure_jni_env();
+    if (env) {
+
+        jstring hostName = env->NewStringUTF(host_name);
+
+        jint r = env->CallIntMethod(sock->obj, socket_configure_tls_method_id, hostName);
+
+        __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, "setupTls() returns %d\n", r);
+
+        return r;
+    }
+
+    return EINVAL;
 }
 
 int platform_socket_connect(struct platform_socket *sock, const char *r_addr, u_int16_t r_port) {
