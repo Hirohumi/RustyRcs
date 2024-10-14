@@ -2095,5 +2095,6 @@ Java_com_everfrost_rusty_rcs_client_RustyRcsClient_00024AsyncLatchHandle_destroy
     __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, "JNI destroy %p\n", nativeHandle);
     if (nativeHandle) {
         rust_async_destroy_waker(nativeHandle->waker);
+        free(nativeHandle);
     }
 }
