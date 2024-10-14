@@ -563,6 +563,18 @@ public class ApplicationEnvironment {
                             int ops = key.interestOps();
                             ops = ops ^ SelectionKey.OP_WRITE;
                             key.interestOps(ops);
+                        } else if (handshakeStatus == SSLEngineResult.HandshakeStatus.NEED_UNWRAP) {
+                            if (closed) {
+                                LogService.w(LOG_TAG, "ssl requires remote data but is already closed");
+                                synchronized (statusLock) {
+                                    Iterator<AsyncLatch> iterator = sslHandshakeLatches.iterator();
+                                    while (iterator.hasNext()) {
+                                        AsyncLatch asyncLatch = iterator.next();
+                                        asyncLatch.wakeUp();
+                                        iterator.remove();
+                                    }
+                                }
+                            }
                         }
                     }
                 }
