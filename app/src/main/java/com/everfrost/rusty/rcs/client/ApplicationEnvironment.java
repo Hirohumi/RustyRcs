@@ -148,8 +148,11 @@ public class ApplicationEnvironment {
                                                 }
                                             }
 
+                                            LogService.i(LOG_TAG, "all pending write triggered");
                                             int ops = key.interestOps();
+                                            LogService.i(LOG_TAG, "cancelling OP_WRITE in " + ops);
                                             ops = ops & (~SelectionKey.OP_WRITE);
+                                            LogService.i(LOG_TAG, "ops is now " + ops);
                                             key.interestOps(ops);
                                         }
                                     } catch (CancelledKeyException e) {
@@ -169,8 +172,11 @@ public class ApplicationEnvironment {
                                             LogService.i(LOG_TAG, "key isWritable");
                                             boolean allWritten = socketSSLEngine.onWriteAvailable(key);
                                             if (allWritten) {
+                                                LogService.i(LOG_TAG, "all pending write finished");
                                                 int ops = key.interestOps();
+                                                LogService.i(LOG_TAG, "cancelling OP_WRITE in " + ops);
                                                 ops = ops & (~SelectionKey.OP_WRITE);
+                                                LogService.i(LOG_TAG, "ops is now " + ops);
                                                 key.interestOps(ops);
                                             }
                                         }
@@ -409,6 +415,8 @@ public class ApplicationEnvironment {
 
             Channel channel = key.channel();
 
+            LogService.i(LOG_TAG, "onReadAvailable for channel " + channel);
+
             if (channel instanceof ReadableByteChannel) {
 
                 ReadableByteChannel readableByteChannel = (ReadableByteChannel) channel;
@@ -427,19 +435,21 @@ public class ApplicationEnvironment {
 
                 LogService.i(LOG_TAG, "read " + read + " bytes from channel");
 
+                LogService.i(LOG_TAG, "position=" + readBuffer.position() + ", limit=" + readBuffer.limit() + " after read");
+
                 if (read == -1) {
                     closed = true;
                 }
 
                 boolean completed = false;
 
+                int produced = 0;
+
                 synchronized (readLock) {
 
                     if (closed || failed) {
                         readClosed = true;
                     }
-
-                    int produced = 0;
 
                     while (readBuffer.position() > 0) {
 
@@ -501,9 +511,14 @@ public class ApplicationEnvironment {
                     }
                 }
 
-                if (!readBuffer.hasRemaining()) {
+                LogService.i(LOG_TAG, "position=" + readBuffer.position() + ", limit=" + readBuffer.limit() + " after decryption");
+
+                if (!readBuffer.hasRemaining() || (closed && produced == 0)) {
+                    LogService.i(LOG_TAG, "no more data remaining to read or to decrypt");
                     int ops = key.interestOps();
+                    LogService.i(LOG_TAG, "cancelling OP_READ in " + ops);
                     ops = ops & (~SelectionKey.OP_READ);
+                    LogService.i(LOG_TAG, "ops is now " + ops);
                     key.interestOps(ops);
                 }
 
@@ -560,8 +575,11 @@ public class ApplicationEnvironment {
                             });
 
                         } else if (handshakeStatus == SSLEngineResult.HandshakeStatus.NEED_WRAP) {
+                            LogService.i(LOG_TAG, "need more input data to perform ssl-engine wrap");
                             int ops = key.interestOps();
+                            LogService.i(LOG_TAG, "re-adding OP_WRITE in " + ops);
                             ops = ops ^ SelectionKey.OP_WRITE;
+                            LogService.i(LOG_TAG, "ops is now " + ops);
                             key.interestOps(ops);
                         } else if (handshakeStatus == SSLEngineResult.HandshakeStatus.NEED_UNWRAP) {
                             if (closed) {
@@ -578,6 +596,13 @@ public class ApplicationEnvironment {
                         }
                     }
                 }
+            } else {
+                LogService.i(LOG_TAG, "cannot handle this type of channel");
+                int ops = key.interestOps();
+                LogService.i(LOG_TAG, "cancelling OP_READ in " + ops);
+                ops = ops & (~SelectionKey.OP_READ);
+                LogService.i(LOG_TAG, "ops is now " + ops);
+                key.interestOps(ops);
             }
         }
 
