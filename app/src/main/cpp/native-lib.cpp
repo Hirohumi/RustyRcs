@@ -1101,7 +1101,7 @@ Java_com_everfrost_rusty_rcs_client_RustyRcsClient_downloadFile(JNIEnv *env, jcl
 
     auto *progressCallbackContext = static_cast<struct download_file_progress_callback_context *>(calloc(1, sizeof(struct download_file_progress_callback_context)));
 
-    progressCallbackContext->obj = env->NewGlobalRef(result_callback);
+    progressCallbackContext->obj = env->NewGlobalRef(progress_callback);
 
     auto *resultCallbackContext = static_cast<struct download_file_result_callback_context *>(calloc(1, sizeof(struct download_file_result_callback_context)));
 
