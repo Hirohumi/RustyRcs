@@ -106,7 +106,7 @@ public class ApplicationEnvironment {
                         Iterator<SelectionKey> iterator = selectedKeys.iterator();
                         while (iterator.hasNext()) {
                             SelectionKey key = iterator.next();
-                            LogService.i(LOG_TAG, "on SelectionKey " + key);
+                            LogService.i(LOG_TAG, "on SelectionKey " + key + " ready ops=" + key.readyOps());
                             if (key.isValid()) {
                                 Object attachment = key.attachment();
                                 if (attachment instanceof AsyncLatch) {
@@ -135,6 +135,13 @@ public class ApplicationEnvironment {
                                                     it.remove();
                                                 }
                                             }
+
+                                            LogService.i(LOG_TAG, "all pending reads triggered");
+                                            int ops = key.interestOps();
+                                            LogService.i(LOG_TAG, "cancelling OP_READ in " + ops);
+                                            ops = ops & (~SelectionKey.OP_READ);
+                                            LogService.i(LOG_TAG, "ops is now " + ops);
+                                            key.interestOps(ops);
                                         }
 
                                         if (key.isWritable()) {
@@ -851,6 +858,8 @@ public class ApplicationEnvironment {
 
                     sslHandshakeLatches.add(asyncLatch);
 
+                    LogService.i(LOG_TAG, "platform_socket_finish_handshake will block, setting up channel selector");
+
                     synchronized (registerLock) {
                         socketSelector.wakeup();
                         try {
@@ -993,6 +1002,7 @@ public class ApplicationEnvironment {
                     RustyRcsClient.AsyncLatchHandle.destroy(asyncHandle);
 
                     if (socketSSLEngine != null) {
+                        LogService.i(LOG_TAG, "ssl socket connected, setting up channel selector");
                         synchronized (registerLock) {
                             socketSelector.wakeup();
                             try {
@@ -1004,6 +1014,7 @@ public class ApplicationEnvironment {
                             }
                         }
                     } else {
+                        LogService.i(LOG_TAG, "socket connected, setting up channel selector");
                         synchronized (registerLock) {
                             socketSelector.wakeup();
                             try {
@@ -1020,6 +1031,8 @@ public class ApplicationEnvironment {
                 } else {
 
                     AsyncLatch asyncLatch = new AsyncLatch(asyncHandle);
+
+                    LogService.i(LOG_TAG, "platform_socket_finish_connect will block, setting up channel selector");
 
                     synchronized (registerLock) {
                         socketSelector.wakeup();
@@ -1129,7 +1142,9 @@ public class ApplicationEnvironment {
                     }
                 }
 
-                if (read > 0) {
+                if (read == 0) {
+                    LogService.i(LOG_TAG, "platform_read_socket will block, setting up channel selector");
+
                     synchronized (registerLock) {
                         socketSelector.wakeup();
                         try {
@@ -1173,6 +1188,19 @@ public class ApplicationEnvironment {
                     AsyncLatch asyncLatch = new AsyncLatch(asyncHandle);
 
                     readLatches.add(asyncLatch);
+
+                    LogService.i(LOG_TAG, "platform_read_socket will block, setting up channel selector");
+
+                    synchronized (registerLock) {
+                        socketSelector.wakeup();
+                        try {
+                            SelectionKey selectionKey = selectableChannel.register(socketSelector, SelectionKey.OP_READ, this);
+                            LogService.i(LOG_TAG, "selectableChannel event registered with:" + selectionKey);
+                        } catch (ClosedChannelException | IllegalStateException | IllegalArgumentException e) {
+                            LogService.w(LOG_TAG, "failed to register selectable channel:", e);
+                            return -1;
+                        }
+                    }
                 } else {
                     RustyRcsClient.AsyncLatchHandle.destroy(asyncHandle);
                 }
@@ -1220,6 +1248,8 @@ public class ApplicationEnvironment {
                     RustyRcsClient.AsyncLatchHandle.destroy(asyncHandle);
                 }
 
+                LogService.i(LOG_TAG, "platform_write_socket will block, setting up channel selector");
+
                 synchronized (registerLock) {
                     socketSelector.wakeup();
                     try {
@@ -1262,6 +1292,8 @@ public class ApplicationEnvironment {
                     AsyncLatch asyncLatch = new AsyncLatch(asyncHandle);
 
                     writeLatches.add(asyncLatch);
+
+                    LogService.i(LOG_TAG, "platform_write_socket will block, setting up channel selector");
 
                     synchronized (registerLock) {
                         socketSelector.wakeup();
@@ -1308,6 +1340,8 @@ public class ApplicationEnvironment {
                 }
 
                 if (!writeCompleted) {
+                    LogService.i(LOG_TAG, "socket still require shutdown, setting up channel selector");
+
                     synchronized (registerLock) {
                         socketSelector.wakeup();
                         try {

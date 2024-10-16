@@ -91,9 +91,9 @@ public class RustyRcsClient {
     public static native void sendImdnReport(long nativeHandle, String imdnContent, String senderUri, int senderServiceType, long senderSessionNativeHandle, SendImdnReportCallback callback);
 
     public interface UploadFileProgressCallback {
-
         void onProgress(int current, int total);
     }
+
     public interface UploadFileResultCallback {
         void onResult(int statusCode, String reasonPhrase, String resultXml);
     }
