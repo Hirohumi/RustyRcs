@@ -13,6 +13,7 @@ import android.telephony.SubscriptionInfo;
 import android.telephony.SubscriptionManager;
 import android.telephony.TelephonyManager;
 import android.util.Base64;
+import android.util.Log;
 
 import androidx.annotation.NonNull;
 
@@ -51,6 +52,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicLong;
 
 import javax.net.ssl.SNIHostName;
 import javax.net.ssl.SNIServerName;
@@ -100,7 +102,7 @@ public class ApplicationEnvironment {
                             LogService.v(LOG_TAG, "synchronizing selector registration");
                         }
                         LogService.i(LOG_TAG, "socketSelector.select()");
-                        int r = socketSelector.select();
+                        int r = socketSelector.select(0);
                         LogService.i(LOG_TAG, "socketSelector.select() returns " + r);
                         Set<SelectionKey> selectedKeys = socketSelector.selectedKeys();
                         Iterator<SelectionKey> iterator = selectedKeys.iterator();
@@ -135,6 +137,9 @@ public class ApplicationEnvironment {
                                                     it.remove();
                                                 }
                                             }
+
+                                            // FIXME: 2024/10/22 this thread runs so fast that the underlying rust caller (poll_read) may not have returned, and according to https://tokio.rs/tokio/tutorial/async#wakers, "Forgetting to wake a task after returning Poll::Pending is a common source of bugs." even when we called wake() in priori
+                                            //    this is so stupid
 
                                             LogService.i(LOG_TAG, "all pending reads triggered");
                                             int ops = key.interestOps();
@@ -341,25 +346,39 @@ public class ApplicationEnvironment {
     }
 
     private static class AsyncLatch {
-        private volatile long nativeHandle;
+        private final AtomicLong nativeHandle;
         private AsyncLatch(long nativeHandle) {
-            this.nativeHandle = nativeHandle;
+            this.nativeHandle = new AtomicLong(nativeHandle);
         }
 
         private void wakeUp() {
-            if (nativeHandle != 0L) {
-                RustyRcsClient.AsyncLatchHandle.wakeUp(nativeHandle);
-                RustyRcsClient.AsyncLatchHandle.destroy(nativeHandle);
-                nativeHandle = 0L;
+            while (true) {
+                long handle = nativeHandle.get();
+                if (handle == 0) {
+                    break;
+                }
+
+                if (nativeHandle.compareAndSet(handle, 0)) {
+                    RustyRcsClient.AsyncLatchHandle.wakeUp(handle);
+                    RustyRcsClient.AsyncLatchHandle.destroy(handle);
+                    break;
+                }
             }
         }
 
         @Override
         protected void finalize() throws Throwable {
             super.finalize();
-            if (nativeHandle != 0L) {
-                RustyRcsClient.AsyncLatchHandle.destroy(nativeHandle);
-                nativeHandle = 0L;
+            while (true) {
+                long handle = nativeHandle.get();
+                if (handle == 0) {
+                    break;
+                }
+
+                if (nativeHandle.compareAndSet(handle, 0)) {
+                    RustyRcsClient.AsyncLatchHandle.destroy(handle);
+                    break;
+                }
             }
         }
     }
@@ -1091,9 +1110,9 @@ public class ApplicationEnvironment {
 
         public int read(byte[] bytes, long asyncHandle) {
 
-            LogService.i(LOG_TAG, "read max " + bytes.length + " bytes");
-
             if (socketSSLEngine != null) {
+
+                LogService.i(LOG_TAG, "read ssl max " + bytes.length + " bytes");
 
                 int read;
 
@@ -1160,6 +1179,8 @@ public class ApplicationEnvironment {
                 return read;
 
             } else {
+
+                LogService.i(LOG_TAG, "read max " + bytes.length + " bytes");
 
                 int read;
 
