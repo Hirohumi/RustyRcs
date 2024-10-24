@@ -13,7 +13,6 @@ import android.telephony.SubscriptionInfo;
 import android.telephony.SubscriptionManager;
 import android.telephony.TelephonyManager;
 import android.util.Base64;
-import android.util.Log;
 
 import androidx.annotation.NonNull;
 
@@ -35,7 +34,6 @@ import java.nio.channels.ConnectionPendingException;
 import java.nio.channels.NoConnectionPendingException;
 import java.nio.channels.NonReadableChannelException;
 import java.nio.channels.NonWritableChannelException;
-import java.nio.channels.NotYetConnectedException;
 import java.nio.channels.ReadableByteChannel;
 import java.nio.channels.SelectableChannel;
 import java.nio.channels.SelectionKey;
@@ -49,6 +47,7 @@ import java.util.Collections;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
@@ -102,7 +101,7 @@ public class ApplicationEnvironment {
                             LogService.v(LOG_TAG, "synchronizing selector registration");
                         }
                         LogService.i(LOG_TAG, "socketSelector.select()");
-                        int r = socketSelector.select(0);
+                        int r = socketSelector.select();
                         LogService.i(LOG_TAG, "socketSelector.select() returns " + r);
                         Set<SelectionKey> selectedKeys = socketSelector.selectedKeys();
                         Iterator<SelectionKey> iterator = selectedKeys.iterator();
@@ -127,46 +126,153 @@ public class ApplicationEnvironment {
                                     AsyncSocket asyncSocket = (AsyncSocket) attachment;
 
                                     try {
+
+                                        int ops = key.interestOps();
+                                        int newOps = ops;
+
                                         if (key.isReadable()) {
                                             LogService.i(LOG_TAG, "key isReadable");
-                                            synchronized (asyncSocket.readLatches) {
-                                                Iterator<AsyncLatch> it = asyncSocket.readLatches.iterator();
-                                                while (it.hasNext()) {
-                                                    AsyncLatch asyncLatch = it.next();
-                                                    asyncLatch.wakeUp();
-                                                    it.remove();
+
+                                            Channel channel = key.channel();
+
+                                            LogService.i(LOG_TAG, "onReadAvailable for channel " + channel);
+
+                                            if (channel instanceof ReadableByteChannel) {
+
+                                                ReadableByteChannel readableByteChannel = (ReadableByteChannel) channel;
+
+                                                boolean closed = false;
+                                                boolean failed = false;
+                                                boolean full;
+                                                boolean haveData;
+
+                                                int read = 0;
+
+                                                synchronized (asyncSocket.readLock) {
+
+                                                    try {
+                                                        read = readableByteChannel.read(asyncSocket.readBuffer);
+                                                    } catch (NonReadableChannelException |
+                                                             IOException e) {
+                                                        LogService.w(LOG_TAG, "error reading plain socket:", e);
+                                                        failed = true;
+                                                    }
+
+                                                    full = !asyncSocket.readBuffer.hasRemaining();
+                                                    haveData = asyncSocket.readBuffer.position() > 0;
+                                                }
+
+                                                LogService.i(LOG_TAG, "read " + read + " bytes from channel");
+
+                                                if (read == -1) {
+                                                    closed = true;
+                                                }
+
+                                                if (closed || failed || full) {
+                                                    if (full) {
+                                                        LogService.i(LOG_TAG, "cannot read further into the buffer");
+                                                    } else {
+                                                        LogService.i(LOG_TAG, "no more data remaining to read");
+                                                    }
+
+                                                    LogService.i(LOG_TAG, "cancelling OP_READ in " + newOps);
+                                                    newOps = newOps & (~SelectionKey.OP_READ);
+                                                    LogService.i(LOG_TAG, "ops is now " + newOps);
+                                                }
+
+                                                if (haveData) {
+                                                    synchronized (asyncSocket.readLatches) {
+                                                        Iterator<AsyncLatch> it = asyncSocket.readLatches.iterator();
+                                                        while (it.hasNext()) {
+                                                            AsyncLatch asyncLatch = it.next();
+                                                            asyncLatch.wakeUp();
+                                                            it.remove();
+                                                        }
+                                                    }
                                                 }
                                             }
-
-                                            // FIXME: 2024/10/22 this thread runs so fast that the underlying rust caller (poll_read) may not have returned, and according to https://tokio.rs/tokio/tutorial/async#wakers, "Forgetting to wake a task after returning Poll::Pending is a common source of bugs." even when we called wake() in priori
-                                            //    this is so stupid
-
-                                            LogService.i(LOG_TAG, "all pending reads triggered");
-                                            int ops = key.interestOps();
-                                            LogService.i(LOG_TAG, "cancelling OP_READ in " + ops);
-                                            ops = ops & (~SelectionKey.OP_READ);
-                                            LogService.i(LOG_TAG, "ops is now " + ops);
-                                            key.interestOps(ops);
                                         }
 
                                         if (key.isWritable()) {
                                             LogService.i(LOG_TAG, "key isWritable");
-                                            synchronized (asyncSocket.writeLatches) {
-                                                Iterator<AsyncLatch> it = asyncSocket.writeLatches.iterator();
-                                                while (it.hasNext()) {
-                                                    AsyncLatch asyncLatch = it.next();
-                                                    asyncLatch.wakeUp();
-                                                    it.remove();
+
+                                            Channel channel = key.channel();
+
+                                            LogService.i(LOG_TAG, "onWriteAvailable for ssl channel " + channel);
+
+                                            if (channel instanceof WritableByteChannel) {
+
+                                                WritableByteChannel writableByteChannel = (WritableByteChannel) channel;
+
+                                                boolean allWritten = false;
+
+                                                int consumed = 0;
+
+                                                boolean writeFailed = false;
+
+                                                synchronized (asyncSocket.writeLock) {
+
+                                                    while (asyncSocket.writeBuffer.position() > 0) {
+
+                                                        int written = 0;
+
+                                                        asyncSocket.writeBuffer.flip();
+                                                        try {
+                                                            written = writableByteChannel.write(asyncSocket.writeBuffer);
+                                                        } catch (NonWritableChannelException | IOException e) {
+                                                            LogService.w(LOG_TAG, "error writing plain socket:", e);
+                                                            writeFailed = true;
+                                                        } finally {
+                                                            asyncSocket.writeBuffer.compact();
+                                                        }
+
+                                                        if (written <= 0) {
+                                                            break;
+                                                        } else {
+                                                            consumed += written;
+                                                        }
+                                                    }
+
+                                                    if (asyncSocket.writeBuffer.position() == 0) {
+                                                        allWritten = true;
+                                                    }
+                                                }
+
+                                                if (allWritten || writeFailed) {
+                                                    if (allWritten) {
+                                                        LogService.i(LOG_TAG, "all pending write finished");
+                                                    } else {
+                                                        LogService.i(LOG_TAG, "cannot write further into the channel");
+                                                    }
+                                                    LogService.i(LOG_TAG, "cancelling OP_WRITE in " + newOps);
+                                                    newOps = newOps & (~SelectionKey.OP_WRITE);
+                                                    LogService.i(LOG_TAG, "ops is now " + newOps);
+                                                }
+
+                                                if (consumed > 0) {
+                                                    synchronized (asyncSocket.writeLatches) {
+                                                        Iterator<AsyncLatch> it = asyncSocket.writeLatches.iterator();
+                                                        while (it.hasNext()) {
+                                                            AsyncLatch asyncLatch = it.next();
+                                                            asyncLatch.wakeUp();
+                                                            it.remove();
+                                                        }
+                                                    }
                                                 }
                                             }
-
-                                            LogService.i(LOG_TAG, "all pending write triggered");
-                                            int ops = key.interestOps();
-                                            LogService.i(LOG_TAG, "cancelling OP_WRITE in " + ops);
-                                            ops = ops & (~SelectionKey.OP_WRITE);
-                                            LogService.i(LOG_TAG, "ops is now " + ops);
-                                            key.interestOps(ops);
                                         }
+
+                                        synchronized (registerLock) {
+                                            if (ops != newOps) {
+                                                if (newOps == 0) {
+                                                    LogService.i(LOG_TAG, "cancelling key " + key);
+                                                    key.cancel();
+                                                } else {
+                                                    key.interestOps(newOps);
+                                                }
+                                            }
+                                        }
+
                                     } catch (CancelledKeyException e) {
                                         LogService.w(LOG_TAG, "key is cancelled:", e);
                                     }
@@ -174,22 +280,40 @@ public class ApplicationEnvironment {
 
                                 if (attachment instanceof SocketSSLEngine) {
                                     SocketSSLEngine socketSSLEngine = (SocketSSLEngine) attachment;
+
                                     try {
+
+                                        int ops = key.interestOps();
+                                        int newOps = ops;
+
                                         if (key.isReadable()) {
                                             LogService.i(LOG_TAG, "key isReadable");
-                                            socketSSLEngine.onReadAvailable(key);
+                                            boolean allRead = socketSSLEngine.onReadAvailable(key);
+                                            if (allRead) {
+                                                LogService.i(LOG_TAG, "no more data remaining to read or to decrypt, cancelling OP_READ in " + newOps);
+                                                newOps = newOps & (~SelectionKey.OP_READ);
+                                                LogService.i(LOG_TAG, "ops is now " + newOps);
+                                            }
                                         }
 
                                         if (key.isWritable()) {
                                             LogService.i(LOG_TAG, "key isWritable");
                                             boolean allWritten = socketSSLEngine.onWriteAvailable(key);
                                             if (allWritten) {
-                                                LogService.i(LOG_TAG, "all pending write finished");
-                                                int ops = key.interestOps();
-                                                LogService.i(LOG_TAG, "cancelling OP_WRITE in " + ops);
-                                                ops = ops & (~SelectionKey.OP_WRITE);
-                                                LogService.i(LOG_TAG, "ops is now " + ops);
-                                                key.interestOps(ops);
+                                                LogService.i(LOG_TAG, "all pending write finished, cancelling OP_WRITE in " + newOps);
+                                                newOps = newOps & (~SelectionKey.OP_WRITE);
+                                                LogService.i(LOG_TAG, "ops is now " + newOps);
+                                            }
+                                        }
+
+                                        synchronized (registerLock) {
+                                            if (ops != newOps) {
+                                                if (newOps == 0) {
+                                                    LogService.i(LOG_TAG, "cancelling key " + key);
+                                                    key.cancel();
+                                                } else {
+                                                    key.interestOps(newOps);
+                                                }
                                             }
                                         }
                                     } catch (CancelledKeyException e) {
@@ -391,13 +515,13 @@ public class ApplicationEnvironment {
 
         private final ByteBuffer decrypted;
 
-        private final Object readLock = new Object();
+        private final Object readLock;
 
         private final List<AsyncLatch> sslReadLatches = new LinkedList<>();
 
         private boolean readClosed = false;
 
-        private final Object writeLock = new Object();
+        private final Object writeLock;
 
         private final ByteBuffer writeBuffer;
 
@@ -423,25 +547,29 @@ public class ApplicationEnvironment {
 
         private final List<AsyncLatch> sslHandshakeLatches = new LinkedList<>();
 
-        private SocketSSLEngine(SSLEngine engine) {
+        private SocketSSLEngine(SSLEngine engine, ByteBuffer readBuffer, ByteBuffer writeBuffer, Object readLock, Object writeLock) {
             this.engine = engine;
 
             final int ioBufferSize = 64 * 1024;
 
-            readBuffer = ByteBuffer.allocate(ioBufferSize);
+            this.readLock = readLock;
+            this.readBuffer = readBuffer;
 
             decrypted = ByteBuffer.allocate(ioBufferSize);
 
-            writeBuffer = ByteBuffer.allocate(ioBufferSize);
+            this.writeLock = writeLock;
+            this.writeBuffer = writeBuffer;
 
             encrypted = ByteBuffer.allocate(ioBufferSize);
         }
 
-        public void onReadAvailable(SelectionKey key) {
+        public boolean onReadAvailable(SelectionKey key) {
+
+            boolean allRead = false;
 
             Channel channel = key.channel();
 
-            LogService.i(LOG_TAG, "onReadAvailable for channel " + channel);
+            LogService.i(LOG_TAG, "onReadAvailable for ssl channel " + channel);
 
             if (channel instanceof ReadableByteChannel) {
 
@@ -540,12 +668,7 @@ public class ApplicationEnvironment {
                 LogService.i(LOG_TAG, "position=" + readBuffer.position() + ", limit=" + readBuffer.limit() + " after decryption");
 
                 if (!readBuffer.hasRemaining() || (closed && produced == 0)) {
-                    LogService.i(LOG_TAG, "no more data remaining to read or to decrypt");
-                    int ops = key.interestOps();
-                    LogService.i(LOG_TAG, "cancelling OP_READ in " + ops);
-                    ops = ops & (~SelectionKey.OP_READ);
-                    LogService.i(LOG_TAG, "ops is now " + ops);
-                    key.interestOps(ops);
+                    allRead = true;
                 }
 
                 if (completed) {
@@ -624,12 +747,10 @@ public class ApplicationEnvironment {
                 }
             } else {
                 LogService.i(LOG_TAG, "cannot handle this type of channel");
-                int ops = key.interestOps();
-                LogService.i(LOG_TAG, "cancelling OP_READ in " + ops);
-                ops = ops & (~SelectionKey.OP_READ);
-                LogService.i(LOG_TAG, "ops is now " + ops);
-                key.interestOps(ops);
+                allRead = true;
             }
+
+            return allRead;
         }
 
         public boolean onWriteAvailable(SelectionKey key) {
@@ -637,6 +758,8 @@ public class ApplicationEnvironment {
             boolean allWritten = false;
 
             Channel channel = key.channel();
+
+            LogService.i(LOG_TAG, "onWriteAvailable for ssl channel " + channel);
 
             if (channel instanceof WritableByteChannel) {
 
@@ -935,9 +1058,23 @@ public class ApplicationEnvironment {
 
         private final List<AsyncLatch> writeLatches = Collections.synchronizedList(new LinkedList<>());
 
+        private final Object readLock = new Object();
+
+        private final ByteBuffer readBuffer;
+
+        private final Object writeLock = new Object();
+
+        private final ByteBuffer writeBuffer;
+
         private SocketSSLEngine socketSSLEngine;
 
         private AsyncSocket(Selector socketSelector, SocketChannel socketChannel, SelectableChannel selectableChannel) {
+
+            final int ioBufferSize = 64 * 1024;
+
+            this.readBuffer = ByteBuffer.allocate(ioBufferSize);
+
+            this.writeBuffer = ByteBuffer.allocate(ioBufferSize);
 
             this.socketSelector = socketSelector;
 
@@ -989,7 +1126,7 @@ public class ApplicationEnvironment {
 
             LogService.i(LOG_TAG, "configured ssl engine");
 
-            this.socketSSLEngine = new SocketSSLEngine(engine);
+            this.socketSSLEngine = new SocketSSLEngine(engine, readBuffer, writeBuffer, readLock, writeLock);
 
             return 0;
         }
@@ -1022,27 +1159,15 @@ public class ApplicationEnvironment {
 
                     if (socketSSLEngine != null) {
                         LogService.i(LOG_TAG, "ssl socket connected, setting up channel selector");
-                        synchronized (registerLock) {
-                            socketSelector.wakeup();
-                            try {
-                                SelectionKey selectionKey = selectableChannel.register(socketSelector, SelectionKey.OP_READ, socketSSLEngine);
-                                LogService.i(LOG_TAG, "selectableChannel event registered with:" + selectionKey);
-                            } catch (ClosedChannelException | IllegalStateException | IllegalArgumentException e) {
-                                LogService.w(LOG_TAG, "failed to register selectable channel:", e);
-                                return -1;
-                            }
+                        int registerResult = registerSelectionKey(SelectionKey.OP_READ, socketSSLEngine, true);
+                        if (registerResult < 0) {
+                            return -1;
                         }
                     } else {
                         LogService.i(LOG_TAG, "socket connected, setting up channel selector");
-                        synchronized (registerLock) {
-                            socketSelector.wakeup();
-                            try {
-                                SelectionKey selectionKey = selectableChannel.register(socketSelector, SelectionKey.OP_READ, this);
-                                LogService.i(LOG_TAG, "selectableChannel event registered with:" + selectionKey);
-                            } catch (ClosedChannelException | IllegalStateException | IllegalArgumentException e) {
-                                LogService.w(LOG_TAG, "failed to register selectable channel:", e);
-                                return -1;
-                            }
+                        int registerResult = registerSelectionKey(SelectionKey.OP_READ, this, true);
+                        if (registerResult < 0) {
+                            return -1;
                         }
                     }
 
@@ -1053,15 +1178,9 @@ public class ApplicationEnvironment {
 
                     LogService.i(LOG_TAG, "platform_socket_finish_connect will block, setting up channel selector");
 
-                    synchronized (registerLock) {
-                        socketSelector.wakeup();
-                        try {
-                            SelectionKey selectionKey = selectableChannel.register(socketSelector, SelectionKey.OP_CONNECT, asyncLatch);
-                            LogService.i(LOG_TAG, "selectableChannel event registered with:" + selectionKey);
-                        } catch (ClosedChannelException | IllegalStateException | IllegalArgumentException e) {
-                            LogService.w(LOG_TAG, "failed to register selectable channel:", e);
-                            return -1;
-                        }
+                    int registerResult = registerSelectionKey(SelectionKey.OP_CONNECT, asyncLatch, false);
+                    if (registerResult < 0) {
+                        return -1;
                     }
 
                     return 114; // EALREADY
@@ -1164,15 +1283,9 @@ public class ApplicationEnvironment {
                 if (read == 0) {
                     LogService.i(LOG_TAG, "platform_read_socket will block, setting up channel selector");
 
-                    synchronized (registerLock) {
-                        socketSelector.wakeup();
-                        try {
-                            SelectionKey selectionKey = selectableChannel.register(socketSelector, SelectionKey.OP_READ | SelectionKey.OP_WRITE, socketSSLEngine);
-                            LogService.i(LOG_TAG, "selectableChannel event registered with:" + selectionKey);
-                        } catch (ClosedChannelException | IllegalStateException | IllegalArgumentException e) {
-                            LogService.w(LOG_TAG, "failed to register selectable channel:", e);
-                            return -1;
-                        }
+                    int registerResult = registerSelectionKey(SelectionKey.OP_READ | SelectionKey.OP_WRITE, socketSSLEngine, true);
+                    if (registerResult < 0) {
+                        return -1;
                     }
                 }
 
@@ -1184,25 +1297,34 @@ public class ApplicationEnvironment {
 
                 int read;
 
-                ByteBuffer byteBuffer = ByteBuffer.wrap(bytes);
+//                ByteBuffer byteBuffer = ByteBuffer.wrap(bytes);
+//
+//                try {
+//
+//                    read = socketChannel.read(byteBuffer);
+//
+//                } catch (NotYetConnectedException e) {
+//
+//                    LogService.w(LOG_TAG, "socket not yet connected:", e);
+//
+//                    read = 0;
+//
+//                } catch (IOException e) {
+//
+//                    LogService.w(LOG_TAG, "error reading socket:", e);
+//
+//                    RustyRcsClient.AsyncLatchHandle.destroy(asyncHandle);
+//
+//                    return -1;
+//                }
 
-                try {
-
-                    read = socketChannel.read(byteBuffer);
-
-                } catch (NotYetConnectedException e) {
-
-                    LogService.w(LOG_TAG, "socket not yet connected:", e);
-
-                    read = 0;
-
-                } catch (IOException e) {
-
-                    LogService.w(LOG_TAG, "error reading socket:", e);
-
-                    RustyRcsClient.AsyncLatchHandle.destroy(asyncHandle);
-
-                    return -1;
+                synchronized (readLock) {
+                    readBuffer.flip();
+                    int remainingBefore = readBuffer.remaining();
+                    readBuffer.get(bytes, 0, Math.min(remainingBefore, bytes.length));
+                    int remainingAfter = readBuffer.remaining();
+                    readBuffer.compact();
+                    read = remainingBefore - remainingAfter;
                 }
 
                 if (read == 0) {
@@ -1212,15 +1334,11 @@ public class ApplicationEnvironment {
 
                     LogService.i(LOG_TAG, "platform_read_socket will block, setting up channel selector");
 
-                    synchronized (registerLock) {
-                        socketSelector.wakeup();
-                        try {
-                            SelectionKey selectionKey = selectableChannel.register(socketSelector, SelectionKey.OP_READ, this);
-                            LogService.i(LOG_TAG, "selectableChannel event registered with:" + selectionKey);
-                        } catch (ClosedChannelException | IllegalStateException | IllegalArgumentException e) {
-                            LogService.w(LOG_TAG, "failed to register selectable channel:", e);
-                            return -1;
-                        }
+                    int registerResult = registerSelectionKey(SelectionKey.OP_READ, this, false);
+                    if (registerResult < 0) {
+                        return -1;
+                    } else if (registerResult == 11) {
+                        return -11; // will be treated as Poll::Ready(Ok(())) with 0 bytes advanced
                     }
                 } else {
                     RustyRcsClient.AsyncLatchHandle.destroy(asyncHandle);
@@ -1269,17 +1387,9 @@ public class ApplicationEnvironment {
                     RustyRcsClient.AsyncLatchHandle.destroy(asyncHandle);
                 }
 
-                LogService.i(LOG_TAG, "platform_write_socket will block, setting up channel selector");
-
-                synchronized (registerLock) {
-                    socketSelector.wakeup();
-                    try {
-                        SelectionKey selectionKey = selectableChannel.register(socketSelector, SelectionKey.OP_READ | SelectionKey.OP_WRITE, socketSSLEngine);
-                        LogService.i(LOG_TAG, "selectableChannel event registered with:" + selectionKey);
-                    } catch (ClosedChannelException | IllegalStateException | IllegalArgumentException e) {
-                        LogService.w(LOG_TAG, "failed to register selectable channel:", e);
-                        return -1;
-                    }
+                int registerResult = registerSelectionKey(SelectionKey.OP_READ | SelectionKey.OP_WRITE, socketSSLEngine, true);
+                if (registerResult < 0) {
+                    return -1;
                 }
 
                 return written;
@@ -1288,46 +1398,46 @@ public class ApplicationEnvironment {
 
                 int written;
 
-                ByteBuffer byteBuffer = ByteBuffer.wrap(bytes);
+//                ByteBuffer byteBuffer = ByteBuffer.wrap(bytes);
+//
+//                try {
+//
+//                    written = socketChannel.write(byteBuffer);
+//
+//                } catch (NotYetConnectedException e) {
+//
+//                    LogService.w(LOG_TAG, "socket not yet connected:", e);
+//
+//                    written = 0;
+//
+//                } catch (IOException e) {
+//
+//                    LogService.w(LOG_TAG, "error writing socket:", e);
+//
+//                    RustyRcsClient.AsyncLatchHandle.destroy(asyncHandle);
+//
+//                    return -1;
+//                }
 
-                try {
-
-                    written = socketChannel.write(byteBuffer);
-
-                } catch (NotYetConnectedException e) {
-
-                    LogService.w(LOG_TAG, "socket not yet connected:", e);
-
-                    written = 0;
-
-                } catch (IOException e) {
-
-                    LogService.w(LOG_TAG, "error writing socket:", e);
-
-                    RustyRcsClient.AsyncLatchHandle.destroy(asyncHandle);
-
-                    return -1;
+                synchronized (writeLock) {
+                    int positionBefore = writeBuffer.position();
+                    int remaining = writeBuffer.remaining();
+                    writeBuffer.put(bytes, 0, Math.min(remaining, bytes.length));
+                    int positionAfter = writeBuffer.position();
+                    written = positionAfter - positionBefore;
                 }
 
                 if (written == 0) {
                     AsyncLatch asyncLatch = new AsyncLatch(asyncHandle);
 
                     writeLatches.add(asyncLatch);
-
-                    LogService.i(LOG_TAG, "platform_write_socket will block, setting up channel selector");
-
-                    synchronized (registerLock) {
-                        socketSelector.wakeup();
-                        try {
-                            SelectionKey selectionKey = selectableChannel.register(socketSelector, SelectionKey.OP_READ | SelectionKey.OP_WRITE, this);
-                            LogService.i(LOG_TAG, "selectableChannel event registered with:" + selectionKey);
-                        } catch (ClosedChannelException | IllegalStateException | IllegalArgumentException e) {
-                            LogService.w(LOG_TAG, "failed to register selectable channel:", e);
-                            return -1;
-                        }
-                    }
                 } else {
                     RustyRcsClient.AsyncLatchHandle.destroy(asyncHandle);
+                }
+
+                int registerResult = registerSelectionKey(SelectionKey.OP_READ | SelectionKey.OP_WRITE, this, true);
+                if (registerResult < 0) {
+                    return -1;
                 }
 
                 return written;
@@ -1363,15 +1473,9 @@ public class ApplicationEnvironment {
                 if (!writeCompleted) {
                     LogService.i(LOG_TAG, "socket still require shutdown, setting up channel selector");
 
-                    synchronized (registerLock) {
-                        socketSelector.wakeup();
-                        try {
-                            SelectionKey selectionKey = selectableChannel.register(socketSelector, SelectionKey.OP_READ | SelectionKey.OP_WRITE, socketSSLEngine);
-                            LogService.i(LOG_TAG, "selectableChannel event registered with:" + selectionKey);
-                        } catch (ClosedChannelException | IllegalStateException | IllegalArgumentException e) {
-                            LogService.w(LOG_TAG, "failed to register selectable channel:", e);
-                            return -1;
-                        }
+                    int registerResult = registerSelectionKey(SelectionKey.OP_READ | SelectionKey.OP_WRITE, socketSSLEngine, false);
+                    if (registerResult < 0) {
+                        return -1;
                     }
                 }
 
@@ -1392,7 +1496,7 @@ public class ApplicationEnvironment {
                     socketSelector.wakeup();
                     SelectionKey key = socketChannel.keyFor(socketSelector);
                     if (key != null) {
-                        key.cancel();;
+                        key.cancel();
                     }
                 }
 
@@ -1402,7 +1506,43 @@ public class ApplicationEnvironment {
 
                 LogService.w(LOG_TAG, "error closing socket:", e);
             }
+        }
 
+        private int registerSelectionKey(int key, Object att, boolean forceReplace) {
+
+            synchronized (registerLock) {
+                socketSelector.wakeup();
+                SelectionKey selectionKey = selectableChannel.keyFor(socketSelector);
+                if (forceReplace || selectionKey == null) {
+                    try {
+                        selectionKey = selectableChannel.register(socketSelector, key, att);
+                        LogService.i(LOG_TAG, "selectableChannel event registered with:" + selectionKey + " on event " + key);
+                    } catch (ClosedChannelException | IllegalStateException | IllegalArgumentException e) {
+                        LogService.w(LOG_TAG, "failed to register selectable channel:", e);
+                        return -1;
+                    }
+                } else {
+                    try {
+                        int ops = selectionKey.interestOps();
+                        LogService.i(LOG_TAG, "selectableChannel already registered with:" + selectionKey + " on event " + ops);
+                        Object attachment = selectionKey.attachment();
+                        if (!Objects.equals(att, attachment)) {
+                            LogService.i(LOG_TAG, "resetting selectionKey attachment");
+                            selectionKey.attach(att);
+                        }
+                        int newOps = ops | key;
+                        if (ops != newOps) {
+                            LogService.i(LOG_TAG, "adding key " + key + " into selection, ops is now " + newOps);
+                            selectionKey.interestOps(newOps);
+                        }
+                    } catch (CancelledKeyException e) {
+                        LogService.w(LOG_TAG, "key is already cancelled:", e);
+                        return 11;
+                    }
+                }
+            }
+
+            return 0;
         }
 
         public static class SocketInfo {

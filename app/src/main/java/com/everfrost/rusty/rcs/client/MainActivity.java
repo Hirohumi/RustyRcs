@@ -33,6 +33,7 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
 
 import com.everfrost.rusty.rcs.client.model.ChatbotSearchResultJson;
+import com.everfrost.rusty.rcs.client.utils.SubscriptionManagerCompat;
 import com.everfrost.rusty.rcs.client.utils.log.LogService;
 import com.google.gson.Gson;
 import com.google.gson.JsonIOException;
@@ -57,6 +58,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.cert.CertificateEncodingException;
 import java.security.cert.X509Certificate;
+import java.util.List;
 import java.util.UUID;
 
 import javax.net.ssl.TrustManager;
@@ -72,6 +74,8 @@ public class MainActivity extends AppCompatActivity {
     private String fileUploadTid;
 
     private int uploadFailureCount;
+
+    private SubscriptionManagerCompat subscriptionManagerCompat;
 
     private static MessageDigest getMessageDigestInstance() {
         try {
@@ -117,6 +121,16 @@ public class MainActivity extends AppCompatActivity {
 
     private void initRustyRcs() {
         Log.d(TAG, "initRustyRcs");
+
+        try {
+            subscriptionManagerCompat = new SubscriptionManagerCompat(MainActivity.this);
+            subscriptionManagerCompat.register(subscriptionInfoCompatList -> {
+                for (SubscriptionManagerCompat.SubscriptionInfoCompat info : subscriptionInfoCompatList) {
+                    LogService.d(TAG, "card info is: " + info);
+                }
+            });
+        } catch (SecurityException ignored) {
+        }
 
         IntentFilter intentFilter = new IntentFilter("android.intent.action.DATA_SMS_RECEIVED");
         intentFilter.addDataScheme("sms");

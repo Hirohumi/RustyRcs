@@ -1825,6 +1825,9 @@ int platform_read_socket(struct platform_socket *sock, struct rust_async_waker *
 
         if (ret == 0) {
             return EAGAIN;
+        } else if (ret == -11) {
+            *bytes_read = 0;
+            return 0;
         } else {
             return ECONNRESET;
         }
