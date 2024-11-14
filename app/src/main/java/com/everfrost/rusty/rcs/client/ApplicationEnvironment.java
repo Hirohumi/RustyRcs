@@ -107,7 +107,7 @@ public class ApplicationEnvironment {
                         Iterator<SelectionKey> iterator = selectedKeys.iterator();
                         while (iterator.hasNext()) {
                             SelectionKey key = iterator.next();
-                            LogService.i(LOG_TAG, "on SelectionKey " + key + " ready ops=" + key.readyOps());
+                            LogService.i(LOG_TAG, "on SelectionKey " + key + " ready ops=" + key.readyOps() + ", interest ops=" + key.interestOps());
                             if (key.isValid()) {
                                 Object attachment = key.attachment();
                                 if (attachment instanceof AsyncLatch) {
@@ -142,11 +142,10 @@ public class ApplicationEnvironment {
                                                 ReadableByteChannel readableByteChannel = (ReadableByteChannel) channel;
 
                                                 boolean closed = false;
-                                                boolean failed = false;
                                                 boolean full;
                                                 boolean haveData;
 
-                                                int read = 0;
+                                                int read;
 
                                                 synchronized (asyncSocket.readLock) {
 
@@ -155,7 +154,8 @@ public class ApplicationEnvironment {
                                                     } catch (NonReadableChannelException |
                                                              IOException e) {
                                                         LogService.w(LOG_TAG, "error reading plain socket:", e);
-                                                        failed = true;
+                                                        asyncSocket.readClosed = true;
+                                                        read = -1;
                                                     }
 
                                                     full = !asyncSocket.readBuffer.hasRemaining();
@@ -168,7 +168,7 @@ public class ApplicationEnvironment {
                                                     closed = true;
                                                 }
 
-                                                if (closed || failed || full) {
+                                                if (closed || full) {
                                                     if (full) {
                                                         LogService.i(LOG_TAG, "cannot read further into the buffer");
                                                     } else {
@@ -208,7 +208,7 @@ public class ApplicationEnvironment {
 
                                                 int consumed = 0;
 
-                                                boolean writeFailed = false;
+                                                boolean writeFailed;
 
                                                 synchronized (asyncSocket.writeLock) {
 
@@ -221,7 +221,7 @@ public class ApplicationEnvironment {
                                                             written = writableByteChannel.write(asyncSocket.writeBuffer);
                                                         } catch (NonWritableChannelException | IOException e) {
                                                             LogService.w(LOG_TAG, "error writing plain socket:", e);
-                                                            writeFailed = true;
+                                                            asyncSocket.writeFailed = true;
                                                         } finally {
                                                             asyncSocket.writeBuffer.compact();
                                                         }
@@ -232,6 +232,8 @@ public class ApplicationEnvironment {
                                                             consumed += written;
                                                         }
                                                     }
+
+                                                    writeFailed = asyncSocket.writeFailed;
 
                                                     if (asyncSocket.writeBuffer.position() == 0) {
                                                         allWritten = true;
@@ -264,12 +266,8 @@ public class ApplicationEnvironment {
 
                                         synchronized (registerLock) {
                                             if (ops != newOps) {
-                                                if (newOps == 0) {
-                                                    LogService.i(LOG_TAG, "cancelling key " + key);
-                                                    key.cancel();
-                                                } else {
-                                                    key.interestOps(newOps);
-                                                }
+                                                LogService.i(LOG_TAG, "changing interestOps " + newOps);
+                                                key.interestOps(newOps);
                                             }
                                         }
 
@@ -286,10 +284,13 @@ public class ApplicationEnvironment {
                                         int ops = key.interestOps();
                                         int newOps = ops;
 
+                                        SocketSSLEngine.ReadResult readResult = null;
+                                        SocketSSLEngine.WriteResult writeResult = null;
+
                                         if (key.isReadable()) {
                                             LogService.i(LOG_TAG, "key isReadable");
-                                            boolean allRead = socketSSLEngine.onReadAvailable(key);
-                                            if (allRead) {
+                                            readResult = socketSSLEngine.onReadAvailable(key);
+                                            if (readResult.bufferFull) {
                                                 LogService.i(LOG_TAG, "no more data remaining to read or to decrypt, cancelling OP_READ in " + newOps);
                                                 newOps = newOps & (~SelectionKey.OP_READ);
                                                 LogService.i(LOG_TAG, "ops is now " + newOps);
@@ -298,8 +299,8 @@ public class ApplicationEnvironment {
 
                                         if (key.isWritable()) {
                                             LogService.i(LOG_TAG, "key isWritable");
-                                            boolean allWritten = socketSSLEngine.onWriteAvailable(key);
-                                            if (allWritten) {
+                                            writeResult = socketSSLEngine.onWriteAvailable(key);
+                                            if (writeResult.bufferEmpty) {
                                                 LogService.i(LOG_TAG, "all pending write finished, cancelling OP_WRITE in " + newOps);
                                                 newOps = newOps & (~SelectionKey.OP_WRITE);
                                                 LogService.i(LOG_TAG, "ops is now " + newOps);
@@ -308,14 +309,33 @@ public class ApplicationEnvironment {
 
                                         synchronized (registerLock) {
                                             if (ops != newOps) {
-                                                if (newOps == 0) {
-                                                    LogService.i(LOG_TAG, "cancelling key " + key);
-                                                    key.cancel();
-                                                } else {
-                                                    key.interestOps(newOps);
+                                                LogService.i(LOG_TAG, "changing interestOps " + newOps);
+                                                key.interestOps(newOps);
+                                            }
+                                        }
+
+                                        if (readResult != null && readResult.producedSome) {
+                                            synchronized (socketSSLEngine.sslReadLatches) {
+                                                Iterator<AsyncLatch> sslReadIterator = socketSSLEngine.sslReadLatches.iterator();
+                                                while (sslReadIterator.hasNext()) {
+                                                    AsyncLatch asyncLatch = sslReadIterator.next();
+                                                    asyncLatch.wakeUp();
+                                                    sslReadIterator.remove();
                                                 }
                                             }
                                         }
+
+                                        if (writeResult != null && writeResult.consumedSome) {
+                                            synchronized (socketSSLEngine.sslWriteLatches) {
+                                                Iterator<AsyncLatch> sslWriteIterator = socketSSLEngine.sslWriteLatches.iterator();
+                                                while (sslWriteIterator.hasNext()) {
+                                                    AsyncLatch asyncLatch = sslWriteIterator.next();
+                                                    asyncLatch.wakeUp();
+                                                    sslWriteIterator.remove();
+                                                }
+                                            }
+                                        }
+
                                     } catch (CancelledKeyException e) {
                                         LogService.w(LOG_TAG, "key is cancelled:", e);
                                     }
@@ -517,7 +537,9 @@ public class ApplicationEnvironment {
 
         private final Object readLock;
 
-        private final List<AsyncLatch> sslReadLatches = new LinkedList<>();
+        private int readTotal = 0;
+
+        private final List<AsyncLatch> sslReadLatches = Collections.synchronizedList(new LinkedList<>());
 
         private boolean readClosed = false;
 
@@ -527,7 +549,9 @@ public class ApplicationEnvironment {
 
         private final ByteBuffer encrypted;
 
-        private final List<AsyncLatch> sslWriteLatches = new LinkedList<>();
+        private int writeTotal = 0;
+
+        private final List<AsyncLatch> sslWriteLatches = Collections.synchronizedList(new LinkedList<>());
 
         private boolean writeFailed = false;
 
@@ -563,9 +587,19 @@ public class ApplicationEnvironment {
             encrypted = ByteBuffer.allocate(ioBufferSize);
         }
 
-        public boolean onReadAvailable(SelectionKey key) {
+        public static class ReadResult {
+            private final boolean bufferFull;
+            private final boolean producedSome;
+            private ReadResult(boolean bufferFull, boolean producedSome) {
+                this.bufferFull = bufferFull;
+                this.producedSome = producedSome;
+            }
+        }
 
-            boolean allRead = false;
+        public ReadResult onReadAvailable(SelectionKey key) {
+
+            boolean bufferFull = false;
+            boolean producedResult = false;
 
             Channel channel = key.channel();
 
@@ -576,20 +610,23 @@ public class ApplicationEnvironment {
                 ReadableByteChannel readableByteChannel = (ReadableByteChannel) channel;
 
                 boolean closed = false;
-                boolean failed = false;
 
-                int read = 0;
+                int read;
 
                 try {
                     read = readableByteChannel.read(readBuffer);
                 } catch (NonReadableChannelException | IOException e) {
                     LogService.w(LOG_TAG, "error reading tls socket:", e);
-                    failed = true;
+                    read = -1;
                 }
 
-                LogService.i(LOG_TAG, "read " + read + " bytes from channel");
+                if (read > 0) {
+                    readTotal += read;
+                }
 
-                LogService.i(LOG_TAG, "position=" + readBuffer.position() + ", limit=" + readBuffer.limit() + " after read");
+                LogService.d(LOG_TAG, "read " + read + " bytes from channel, totalling " + readTotal + " bytes");
+
+                LogService.d(LOG_TAG, "position=" + readBuffer.position() + ", limit=" + readBuffer.limit() + " after read");
 
                 if (read == -1) {
                     closed = true;
@@ -601,7 +638,7 @@ public class ApplicationEnvironment {
 
                 synchronized (readLock) {
 
-                    if (closed || failed) {
+                    if (closed) {
                         readClosed = true;
                     }
 
@@ -635,6 +672,7 @@ public class ApplicationEnvironment {
                                 continue;
                             } else if (readClosed) {
                                 try {
+                                    LogService.i(LOG_TAG, "closing ssl in-bound");
                                     engine.closeInbound();
                                 } catch (SSLException e) {
                                     LogService.w(LOG_TAG, "ssl socket has not received the proper SSL/TLS close notification message:", e);
@@ -656,25 +694,20 @@ public class ApplicationEnvironment {
                     LogService.i(LOG_TAG, "ssl engine produced " + produced + " bytes");
 
                     if (produced > 0 || readClosed) {
-                        Iterator<AsyncLatch> iterator = sslReadLatches.iterator();
-                        while (iterator.hasNext()) {
-                            AsyncLatch asyncLatch = iterator.next();
-                            asyncLatch.wakeUp();
-                            iterator.remove();
-                        }
+                        producedResult = true;
                     }
                 }
 
-                LogService.i(LOG_TAG, "position=" + readBuffer.position() + ", limit=" + readBuffer.limit() + " after decryption");
+                LogService.d(LOG_TAG, "position=" + readBuffer.position() + ", limit=" + readBuffer.limit() + " after decryption");
 
                 if (!readBuffer.hasRemaining() || (closed && produced == 0)) {
-                    allRead = true;
+                    bufferFull = true;
                 }
 
                 if (completed) {
                     synchronized (shutDownLock) {
                         readCompleted = true;
-                        if (closed || failed) {
+                        if (closed) {
                             writeCompleted = true;
                         }
                         Iterator<AsyncLatch> iterator = sslShutDownLatches.iterator();
@@ -745,17 +778,24 @@ public class ApplicationEnvironment {
                         }
                     }
                 }
-            } else {
-                LogService.i(LOG_TAG, "cannot handle this type of channel");
-                allRead = true;
             }
 
-            return allRead;
+            return new ReadResult(bufferFull, producedResult);
         }
 
-        public boolean onWriteAvailable(SelectionKey key) {
+        public static final class WriteResult {
+            private final boolean bufferEmpty;
+            private final boolean consumedSome;
+            private WriteResult(boolean bufferEmpty, boolean consumedSome) {
+                this.bufferEmpty = bufferEmpty;
+                this.consumedSome = consumedSome;
+            }
+        }
 
-            boolean allWritten = false;
+        public WriteResult onWriteAvailable(SelectionKey key) {
+
+            boolean bufferEmpty = false;
+            boolean consumedSome = false;
 
             Channel channel = key.channel();
 
@@ -767,7 +807,7 @@ public class ApplicationEnvironment {
 
                 int consumed = 0;
 
-                boolean completed = false;
+                boolean cryptroClosed = false;
 
                 synchronized (writeLock) {
 
@@ -806,7 +846,7 @@ public class ApplicationEnvironment {
                                 }
                             }
                         } else if (status == SSLEngineResult.Status.CLOSED) {
-                            completed = true;
+                            cryptroClosed = true;
                             int bytesConsumed = result.bytesConsumed();
                             int bytesProduced = result.bytesProduced();
                             LogService.i(LOG_TAG, "bytesConsumed=" + bytesConsumed + ", bytesProduced=" + bytesProduced);
@@ -824,7 +864,6 @@ public class ApplicationEnvironment {
                         try {
                             encrypted.flip();
                             written = writableByteChannel.write(encrypted);
-                            LogService.i(LOG_TAG, "write " + written + " bytes to channel");
                         } catch (NonWritableChannelException | IOException e) {
                             LogService.w(LOG_TAG, "error writing tls socket:", e);
                             writeFailed = true;
@@ -832,26 +871,37 @@ public class ApplicationEnvironment {
                             encrypted.compact();
                         }
 
+                        if (written > 0) {
+                            writeTotal += written;
+                        }
+
+                        LogService.i(LOG_TAG, "write " + written + " bytes to channel, totalling " + writeTotal + " bytes");
+
                         if (written <= 0) {
                             break;
                         }
                     }
 
-                    if (consumed > 0) {
-                        Iterator<AsyncLatch> iterator = sslWriteLatches.iterator();
-                        while (iterator.hasNext()) {
-                            AsyncLatch asyncLatch = iterator.next();
-                            asyncLatch.wakeUp();
-                            iterator.remove();
-                        }
+                    boolean allConsumed = false;
+
+                    if (encrypted.position() == 0 && writeBuffer.position() == 0) {
+                        allConsumed = true;
+                        bufferEmpty = true;
+                        LogService.i(LOG_TAG, "ssl data all encrypted and written");
                     }
 
-                    if (encrypted.position() == 0) {
-                        allWritten = true;
+                    if (!allConsumed && cryptroClosed) {
+                        writeFailed = true;
+                        LogService.i(LOG_TAG, "write failed, crypto closed early");
+                    }
+
+                    if (consumed > 0 || writeFailed) {
+                        consumedSome = true;
                     }
                 }
 
-                if (allWritten && completed) {
+                if (cryptroClosed) {
+                    bufferEmpty = true;
                     synchronized (shutDownLock) {
                         writeCompleted = true;
                         Iterator<AsyncLatch> iterator = sslShutDownLatches.iterator();
@@ -904,7 +954,7 @@ public class ApplicationEnvironment {
                 }
             }
 
-            return allWritten;
+            return new WriteResult(bufferEmpty, consumedSome);
         }
 
         public SSLEngineResult decrypt() {
@@ -1062,9 +1112,17 @@ public class ApplicationEnvironment {
 
         private final ByteBuffer readBuffer;
 
+        private boolean readClosed = false;
+
+        private int readTotal = 0;
+
         private final Object writeLock = new Object();
 
         private final ByteBuffer writeBuffer;
+
+        private boolean writeFailed = false;
+
+        private int writeTotal = 0;
 
         private SocketSSLEngine socketSSLEngine;
 
@@ -1112,7 +1170,6 @@ public class ApplicationEnvironment {
             SSLEngine engine;
 
             try {
-
                 engine = SSLContext.getDefault().createSSLEngine();
                 engine.setUseClientMode(true);
                 SSLParameters sslParameters = new SSLParameters();
@@ -1271,23 +1328,27 @@ public class ApplicationEnvironment {
 
                             return -1;
                         }
-
-                        AsyncLatch asyncLatch = new AsyncLatch(asyncHandle);
-
-                        socketSSLEngine.sslReadLatches.add(asyncLatch);
-                    } else {
-                        RustyRcsClient.AsyncLatchHandle.destroy(asyncHandle);
                     }
                 }
 
                 if (read == 0) {
                     LogService.i(LOG_TAG, "platform_read_socket will block, setting up channel selector");
 
+                    AsyncLatch asyncLatch = new AsyncLatch(asyncHandle);
+
+                    socketSSLEngine.sslReadLatches.add(asyncLatch);
+
                     int registerResult = registerSelectionKey(SelectionKey.OP_READ | SelectionKey.OP_WRITE, socketSSLEngine, true);
                     if (registerResult < 0) {
                         return -1;
                     }
+                } else {
+                    RustyRcsClient.AsyncLatchHandle.destroy(asyncHandle);
                 }
+
+                readTotal += read;
+
+                LogService.i(LOG_TAG, "we have read " + readTotal + " bytes from decrypted ssl in total");
 
                 return read;
 
@@ -1297,27 +1358,6 @@ public class ApplicationEnvironment {
 
                 int read;
 
-//                ByteBuffer byteBuffer = ByteBuffer.wrap(bytes);
-//
-//                try {
-//
-//                    read = socketChannel.read(byteBuffer);
-//
-//                } catch (NotYetConnectedException e) {
-//
-//                    LogService.w(LOG_TAG, "socket not yet connected:", e);
-//
-//                    read = 0;
-//
-//                } catch (IOException e) {
-//
-//                    LogService.w(LOG_TAG, "error reading socket:", e);
-//
-//                    RustyRcsClient.AsyncLatchHandle.destroy(asyncHandle);
-//
-//                    return -1;
-//                }
-
                 synchronized (readLock) {
                     readBuffer.flip();
                     int remainingBefore = readBuffer.remaining();
@@ -1325,6 +1365,10 @@ public class ApplicationEnvironment {
                     int remainingAfter = readBuffer.remaining();
                     readBuffer.compact();
                     read = remainingBefore - remainingAfter;
+
+                    if (read == 0 && readClosed) {
+                        read = -1;
+                    }
                 }
 
                 if (read == 0) {
@@ -1344,39 +1388,46 @@ public class ApplicationEnvironment {
                     RustyRcsClient.AsyncLatchHandle.destroy(asyncHandle);
                 }
 
+                LogService.i(LOG_TAG, "we have read " + readTotal + " bytes in total");
+
                 return read;
             }
         }
 
         public int write(byte[] bytes, long asyncHandle) {
 
-            LogService.i(LOG_TAG, "write " + bytes.length + " bytes");
-
             if (socketSSLEngine != null) {
+
+                LogService.i(LOG_TAG, "write ssl " + bytes.length + " bytes");
 
                 int written = 0;
 
                 synchronized (socketSSLEngine.writeLock) {
 
-                    int remaining = socketSSLEngine.writeBuffer.remaining();
+                    if (socketSSLEngine.writeFailed) {
+                        written = -1;
+                        LogService.w(LOG_TAG, "ssl socket already failed");
+                    } else {
+                        int remaining = socketSSLEngine.writeBuffer.remaining();
 
-                    LogService.i(LOG_TAG, "writeBuffer remaining:" + remaining);
+                        LogService.i(LOG_TAG, "ssl writeBuffer remaining:" + remaining);
 
-                    if (remaining > 0) {
+                        if (remaining > 0) {
 
-                        int writtenThisTime;
-                        if (remaining > bytes.length - written) {
-                            socketSSLEngine.writeBuffer.put(bytes, written, bytes.length - written);
-                            writtenThisTime = bytes.length - written;
-                        } else {
-                            socketSSLEngine.writeBuffer.put(bytes, written, remaining);
-                            writtenThisTime = remaining;
+                            int writtenThisTime;
+                            if (remaining > bytes.length - written) {
+                                socketSSLEngine.writeBuffer.put(bytes, written, bytes.length - written);
+                                writtenThisTime = bytes.length - written;
+                            } else {
+                                socketSSLEngine.writeBuffer.put(bytes, written, remaining);
+                                writtenThisTime = remaining;
+                            }
+
+                            written += writtenThisTime;
                         }
 
-                        written += writtenThisTime;
+                        LogService.i(LOG_TAG, "enqueued " + written + " bytes to ssl writeBuffer");
                     }
-
-                    LogService.i(LOG_TAG, "enqueued " + written + " bytes to writeBuffer");
                 }
 
                 if (written == 0) {
@@ -1392,39 +1443,39 @@ public class ApplicationEnvironment {
                     return -1;
                 }
 
+                if (written > 0) {
+                    writeTotal += written;
+                }
+
+                LogService.i(LOG_TAG, "we have written " + writeTotal + " bytes to ssl encryption in total");
+
                 return written;
 
             } else {
 
-                int written;
+                LogService.i(LOG_TAG, "write " + bytes.length + " bytes");
 
-//                ByteBuffer byteBuffer = ByteBuffer.wrap(bytes);
-//
-//                try {
-//
-//                    written = socketChannel.write(byteBuffer);
-//
-//                } catch (NotYetConnectedException e) {
-//
-//                    LogService.w(LOG_TAG, "socket not yet connected:", e);
-//
-//                    written = 0;
-//
-//                } catch (IOException e) {
-//
-//                    LogService.w(LOG_TAG, "error writing socket:", e);
-//
-//                    RustyRcsClient.AsyncLatchHandle.destroy(asyncHandle);
-//
-//                    return -1;
-//                }
+                int written = 0;
 
                 synchronized (writeLock) {
-                    int positionBefore = writeBuffer.position();
-                    int remaining = writeBuffer.remaining();
-                    writeBuffer.put(bytes, 0, Math.min(remaining, bytes.length));
-                    int positionAfter = writeBuffer.position();
-                    written = positionAfter - positionBefore;
+                    if (writeFailed) {
+                        written = -1;
+                        LogService.w(LOG_TAG, "socket already failed");
+                    } else {
+                        int remaining = writeBuffer.remaining();
+                        if (remaining > 0) {
+                            int writtenThisTime;
+                            if (remaining > bytes.length - written) {
+                                writeBuffer.put(bytes, written, bytes.length - written);
+                                writtenThisTime = bytes.length - written;
+                            } else {
+                                writeBuffer.put(bytes, written, remaining);
+                                writtenThisTime = remaining;
+                            }
+                            written += writtenThisTime;
+                        }
+                        LogService.i(LOG_TAG, "enqueued " + written + " bytes to writeBuffer");
+                    }
                 }
 
                 if (written == 0) {
@@ -1435,10 +1486,20 @@ public class ApplicationEnvironment {
                     RustyRcsClient.AsyncLatchHandle.destroy(asyncHandle);
                 }
 
+                if (written < 0) {
+                    return -1;
+                }
+
                 int registerResult = registerSelectionKey(SelectionKey.OP_READ | SelectionKey.OP_WRITE, this, true);
                 if (registerResult < 0) {
                     return -1;
                 }
+
+                if (written > 0) {
+                    writeTotal += written;
+                }
+
+                LogService.i(LOG_TAG, "we have written " + writeTotal + " bytes in total");
 
                 return written;
             }
