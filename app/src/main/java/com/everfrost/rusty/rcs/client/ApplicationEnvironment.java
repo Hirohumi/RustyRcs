@@ -100,29 +100,36 @@ public class ApplicationEnvironment {
                         synchronized (registerLock) {
                             LogService.v(LOG_TAG, "synchronizing selector registration");
                         }
-                        LogService.i(LOG_TAG, "socketSelector.select()");
+                        LogService.v(LOG_TAG, "socketSelector.select()");
                         int r = socketSelector.select();
-                        LogService.i(LOG_TAG, "socketSelector.select() returns " + r);
+                        LogService.v(LOG_TAG, "socketSelector.select() returns " + r);
                         Set<SelectionKey> selectedKeys = socketSelector.selectedKeys();
                         Iterator<SelectionKey> iterator = selectedKeys.iterator();
                         while (iterator.hasNext()) {
                             SelectionKey key = iterator.next();
-                            LogService.i(LOG_TAG, "on SelectionKey " + key + " ready ops=" + key.readyOps() + ", interest ops=" + key.interestOps());
+                            LogService.i(LOG_TAG, "on SelectionKey " + key);
                             if (key.isValid()) {
                                 Object attachment = key.attachment();
                                 if (attachment instanceof AsyncLatch) {
+                                    LogService.i(LOG_TAG, "key attachment is AsyncLatch");
                                     AsyncLatch asyncLatch = (AsyncLatch) attachment;
                                     try {
                                         if (key.isConnectable()) {
                                             LogService.i(LOG_TAG, "key isConnectable");
                                             asyncLatch.wakeUp();
+//                                            Object previousAttachment = key.attach(null);
+//                                            if (!Objects.equals(previousAttachment, attachment)) {
+//                                                Log.w(LOG_TAG, "RACE CONDITION FOUND");
+//                                            }
                                         }
                                     } catch (CancelledKeyException e) {
                                         LogService.w(LOG_TAG, "key is cancelled:", e);
+                                        asyncLatch.wakeUp();
                                     }
                                 }
 
                                 if (attachment instanceof AsyncSocket) {
+                                    LogService.i(LOG_TAG, "key attachment is AsyncSocket");
                                     AsyncSocket asyncSocket = (AsyncSocket) attachment;
 
                                     try {
@@ -267,16 +274,43 @@ public class ApplicationEnvironment {
                                         synchronized (registerLock) {
                                             if (ops != newOps) {
                                                 LogService.i(LOG_TAG, "changing interestOps " + newOps);
-                                                key.interestOps(newOps);
+                                                if (newOps == 0) {
+                                                    key.cancel();
+                                                } else {
+                                                    key.interestOps(newOps);
+                                                }
                                             }
                                         }
 
                                     } catch (CancelledKeyException e) {
                                         LogService.w(LOG_TAG, "key is cancelled:", e);
+                                        synchronized (asyncSocket.readLock) {
+                                            asyncSocket.readClosed = true;
+                                        }
+                                        synchronized (asyncSocket.readLatches) {
+                                            Iterator<AsyncLatch> it = asyncSocket.readLatches.iterator();
+                                            while (it.hasNext()) {
+                                                AsyncLatch asyncLatch = it.next();
+                                                asyncLatch.wakeUp();
+                                                it.remove();
+                                            }
+                                        }
+                                        synchronized (asyncSocket.writeLock) {
+                                            asyncSocket.writeFailed = true;
+                                        }
+                                        synchronized (asyncSocket.writeLatches) {
+                                            Iterator<AsyncLatch> it = asyncSocket.writeLatches.iterator();
+                                            while (it.hasNext()) {
+                                                AsyncLatch asyncLatch = it.next();
+                                                asyncLatch.wakeUp();
+                                                it.remove();
+                                            }
+                                        }
                                     }
                                 }
 
                                 if (attachment instanceof SocketSSLEngine) {
+                                    LogService.i(LOG_TAG, "key attachment is SocketSSLEngine");
                                     SocketSSLEngine socketSSLEngine = (SocketSSLEngine) attachment;
 
                                     try {
@@ -310,7 +344,11 @@ public class ApplicationEnvironment {
                                         synchronized (registerLock) {
                                             if (ops != newOps) {
                                                 LogService.i(LOG_TAG, "changing interestOps " + newOps);
-                                                key.interestOps(newOps);
+                                                if (newOps == 0) {
+                                                    key.cancel();
+                                                } else {
+                                                    key.interestOps(newOps);
+                                                }
                                             }
                                         }
 
@@ -338,6 +376,28 @@ public class ApplicationEnvironment {
 
                                     } catch (CancelledKeyException e) {
                                         LogService.w(LOG_TAG, "key is cancelled:", e);
+                                        synchronized (socketSSLEngine.readLock) {
+                                            socketSSLEngine.readClosed = true;
+                                        }
+                                        synchronized (socketSSLEngine.sslReadLatches) {
+                                            Iterator<AsyncLatch> sslReadIterator = socketSSLEngine.sslReadLatches.iterator();
+                                            while (sslReadIterator.hasNext()) {
+                                                AsyncLatch asyncLatch = sslReadIterator.next();
+                                                asyncLatch.wakeUp();
+                                                sslReadIterator.remove();
+                                            }
+                                        }
+                                        synchronized (socketSSLEngine.writeLock) {
+                                            socketSSLEngine.writeFailed = true;
+                                        }
+                                        synchronized (socketSSLEngine.sslWriteLatches) {
+                                            Iterator<AsyncLatch> sslWriteIterator = socketSSLEngine.sslWriteLatches.iterator();
+                                            while (sslWriteIterator.hasNext()) {
+                                                AsyncLatch asyncLatch = sslWriteIterator.next();
+                                                asyncLatch.wakeUp();
+                                                sslWriteIterator.remove();
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -720,60 +780,57 @@ public class ApplicationEnvironment {
                 }
 
                 synchronized (statusLock) {
-                    if (sslSession == null) {
-                        SSLEngineResult.HandshakeStatus handshakeStatus = engine.getHandshakeStatus();
-                        LogService.i(LOG_TAG, "ssl engine handshake status now is " + handshakeStatus);
-                        if (handshakeStatus == SSLEngineResult.HandshakeStatus.NOT_HANDSHAKING) {
-                            sslSession = engine.getSession();
-                            if (sslSession != null) {
-                                Iterator<AsyncLatch> iterator = sslHandshakeLatches.iterator();
-                                while (iterator.hasNext()) {
-                                    AsyncLatch asyncLatch = iterator.next();
-                                    asyncLatch.wakeUp();
-                                    iterator.remove();
-                                }
-                            } else {
-                                LogService.w(LOG_TAG, "ssl handshake finished but cannot retrieve sslSession");
-                            }
-                        } else if (handshakeStatus == SSLEngineResult.HandshakeStatus.NEED_TASK) {
-                            LogService.i(LOG_TAG, "ssl need to perform some task");
-
-                            Runnable task = engine.getDelegatedTask();
-
-                            executor.execute(() -> {
-
-                                task.run();
-
-                                LogService.i(LOG_TAG, "ssl task complete");
-
-                                synchronized (statusLock) {
+                    if (closed) {
+                        Iterator<AsyncLatch> iterator = sslHandshakeLatches.iterator();
+                        while (iterator.hasNext()) {
+                            AsyncLatch asyncLatch = iterator.next();
+                            asyncLatch.wakeUp();
+                            iterator.remove();
+                        }
+                    } else {
+                        if (sslSession == null) {
+                            SSLEngineResult.HandshakeStatus handshakeStatus = engine.getHandshakeStatus();
+                            LogService.i(LOG_TAG, "ssl engine handshake status now is " + handshakeStatus);
+                            if (handshakeStatus == SSLEngineResult.HandshakeStatus.NOT_HANDSHAKING) {
+                                sslSession = engine.getSession();
+                                if (sslSession != null) {
                                     Iterator<AsyncLatch> iterator = sslHandshakeLatches.iterator();
                                     while (iterator.hasNext()) {
                                         AsyncLatch asyncLatch = iterator.next();
                                         asyncLatch.wakeUp();
                                         iterator.remove();
                                     }
+                                } else {
+                                    LogService.w(LOG_TAG, "ssl handshake finished but cannot retrieve sslSession");
                                 }
-                            });
+                            } else if (handshakeStatus == SSLEngineResult.HandshakeStatus.NEED_TASK) {
+                                LogService.i(LOG_TAG, "ssl need to perform some task");
 
-                        } else if (handshakeStatus == SSLEngineResult.HandshakeStatus.NEED_WRAP) {
-                            LogService.i(LOG_TAG, "need more input data to perform ssl-engine wrap");
-                            int ops = key.interestOps();
-                            LogService.i(LOG_TAG, "re-adding OP_WRITE in " + ops);
-                            ops = ops ^ SelectionKey.OP_WRITE;
-                            LogService.i(LOG_TAG, "ops is now " + ops);
-                            key.interestOps(ops);
-                        } else if (handshakeStatus == SSLEngineResult.HandshakeStatus.NEED_UNWRAP) {
-                            if (closed) {
-                                LogService.w(LOG_TAG, "ssl requires remote data but is already closed");
-                                synchronized (statusLock) {
-                                    Iterator<AsyncLatch> iterator = sslHandshakeLatches.iterator();
-                                    while (iterator.hasNext()) {
-                                        AsyncLatch asyncLatch = iterator.next();
-                                        asyncLatch.wakeUp();
-                                        iterator.remove();
+                                Runnable task = engine.getDelegatedTask();
+
+                                executor.execute(() -> {
+
+                                    task.run();
+
+                                    LogService.i(LOG_TAG, "ssl task complete");
+
+                                    synchronized (statusLock) {
+                                        Iterator<AsyncLatch> iterator = sslHandshakeLatches.iterator();
+                                        while (iterator.hasNext()) {
+                                            AsyncLatch asyncLatch = iterator.next();
+                                            asyncLatch.wakeUp();
+                                            iterator.remove();
+                                        }
                                     }
-                                }
+                                });
+
+                            } else if (handshakeStatus == SSLEngineResult.HandshakeStatus.NEED_WRAP) {
+                                LogService.i(LOG_TAG, "need more input data to perform ssl-engine wrap");
+                                int ops = key.interestOps();
+                                LogService.i(LOG_TAG, "re-adding OP_WRITE in " + ops);
+                                ops = ops ^ SelectionKey.OP_WRITE;
+                                LogService.i(LOG_TAG, "ops is now " + ops);
+                                key.interestOps(ops);
                             }
                         }
                     }
@@ -867,6 +924,7 @@ public class ApplicationEnvironment {
                         } catch (NonWritableChannelException | IOException e) {
                             LogService.w(LOG_TAG, "error writing tls socket:", e);
                             writeFailed = true;
+                            cryptroClosed = true;
                         } finally {
                             encrypted.compact();
                         }
@@ -914,41 +972,50 @@ public class ApplicationEnvironment {
                 }
 
                 synchronized (statusLock) {
-                    if (sslSession == null) {
-                        SSLEngineResult.HandshakeStatus handshakeStatus = engine.getHandshakeStatus();
-                        LogService.i(LOG_TAG, "ssl engine handshake status now is " + handshakeStatus);
-                        if (handshakeStatus == SSLEngineResult.HandshakeStatus.NOT_HANDSHAKING) {
-                            sslSession = engine.getSession();
-                            if (sslSession != null) {
-                                Iterator<AsyncLatch> iterator = sslHandshakeLatches.iterator();
-                                while (iterator.hasNext()) {
-                                    AsyncLatch asyncLatch = iterator.next();
-                                    asyncLatch.wakeUp();
-                                    iterator.remove();
-                                }
-                            } else {
-                                LogService.w(LOG_TAG, "ssl handshake finished but cannot retrieve sslSession");
-                            }
-                        } else if (handshakeStatus == SSLEngineResult.HandshakeStatus.NEED_TASK) {
-                            LogService.i(LOG_TAG, "ssl need to perform some task");
-
-                            Runnable task = engine.getDelegatedTask();
-
-                            executor.execute(() -> {
-
-                                task.run();
-
-                                LogService.i(LOG_TAG, "ssl task complete");
-
-                                synchronized (statusLock) {
+                    if (cryptroClosed) {
+                        Iterator<AsyncLatch> iterator = sslHandshakeLatches.iterator();
+                        while (iterator.hasNext()) {
+                            AsyncLatch asyncLatch = iterator.next();
+                            asyncLatch.wakeUp();
+                            iterator.remove();
+                        }
+                    } else {
+                        if (sslSession == null) {
+                            SSLEngineResult.HandshakeStatus handshakeStatus = engine.getHandshakeStatus();
+                            LogService.i(LOG_TAG, "ssl engine handshake status now is " + handshakeStatus);
+                            if (handshakeStatus == SSLEngineResult.HandshakeStatus.NOT_HANDSHAKING) {
+                                sslSession = engine.getSession();
+                                if (sslSession != null) {
                                     Iterator<AsyncLatch> iterator = sslHandshakeLatches.iterator();
                                     while (iterator.hasNext()) {
                                         AsyncLatch asyncLatch = iterator.next();
                                         asyncLatch.wakeUp();
                                         iterator.remove();
                                     }
+                                } else {
+                                    LogService.w(LOG_TAG, "ssl handshake finished but cannot retrieve sslSession");
                                 }
-                            });
+                            } else if (handshakeStatus == SSLEngineResult.HandshakeStatus.NEED_TASK) {
+                                LogService.i(LOG_TAG, "ssl need to perform some task");
+
+                                Runnable task = engine.getDelegatedTask();
+
+                                executor.execute(() -> {
+
+                                    task.run();
+
+                                    LogService.i(LOG_TAG, "ssl task complete");
+
+                                    synchronized (statusLock) {
+                                        Iterator<AsyncLatch> iterator = sslHandshakeLatches.iterator();
+                                        while (iterator.hasNext()) {
+                                            AsyncLatch asyncLatch = iterator.next();
+                                            asyncLatch.wakeUp();
+                                            iterator.remove();
+                                        }
+                                    }
+                                });
+                            }
                         }
                     }
                 }
@@ -1170,6 +1237,7 @@ public class ApplicationEnvironment {
             SSLEngine engine;
 
             try {
+
                 engine = SSLContext.getDefault().createSSLEngine();
                 engine.setUseClientMode(true);
                 SSLParameters sslParameters = new SSLParameters();
