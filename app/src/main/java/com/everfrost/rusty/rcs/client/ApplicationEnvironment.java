@@ -117,10 +117,6 @@ public class ApplicationEnvironment {
                                         if (key.isConnectable()) {
                                             LogService.i(LOG_TAG, "key isConnectable");
                                             asyncLatch.wakeUp();
-//                                            Object previousAttachment = key.attach(null);
-//                                            if (!Objects.equals(previousAttachment, attachment)) {
-//                                                Log.w(LOG_TAG, "RACE CONDITION FOUND");
-//                                            }
                                         }
                                     } catch (CancelledKeyException e) {
                                         LogService.w(LOG_TAG, "key is cancelled:", e);
@@ -864,7 +860,7 @@ public class ApplicationEnvironment {
 
                 int consumed = 0;
 
-                boolean cryptroClosed = false;
+                boolean cryptorClosed = false;
 
                 synchronized (writeLock) {
 
@@ -903,7 +899,7 @@ public class ApplicationEnvironment {
                                 }
                             }
                         } else if (status == SSLEngineResult.Status.CLOSED) {
-                            cryptroClosed = true;
+                            cryptorClosed = true;
                             int bytesConsumed = result.bytesConsumed();
                             int bytesProduced = result.bytesProduced();
                             LogService.i(LOG_TAG, "bytesConsumed=" + bytesConsumed + ", bytesProduced=" + bytesProduced);
@@ -924,7 +920,7 @@ public class ApplicationEnvironment {
                         } catch (NonWritableChannelException | IOException e) {
                             LogService.w(LOG_TAG, "error writing tls socket:", e);
                             writeFailed = true;
-                            cryptroClosed = true;
+                            cryptorClosed = true;
                         } finally {
                             encrypted.compact();
                         }
@@ -948,7 +944,7 @@ public class ApplicationEnvironment {
                         LogService.i(LOG_TAG, "ssl data all encrypted and written");
                     }
 
-                    if (!allConsumed && cryptroClosed) {
+                    if (!allConsumed && cryptorClosed) {
                         writeFailed = true;
                         LogService.i(LOG_TAG, "write failed, crypto closed early");
                     }
@@ -958,7 +954,7 @@ public class ApplicationEnvironment {
                     }
                 }
 
-                if (cryptroClosed) {
+                if (cryptorClosed) {
                     bufferEmpty = true;
                     synchronized (shutDownLock) {
                         writeCompleted = true;
@@ -972,7 +968,7 @@ public class ApplicationEnvironment {
                 }
 
                 synchronized (statusLock) {
-                    if (cryptroClosed) {
+                    if (cryptorClosed) {
                         Iterator<AsyncLatch> iterator = sslHandshakeLatches.iterator();
                         while (iterator.hasNext()) {
                             AsyncLatch asyncLatch = iterator.next();
