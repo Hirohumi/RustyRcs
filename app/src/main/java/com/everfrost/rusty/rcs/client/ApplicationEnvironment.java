@@ -201,7 +201,7 @@ public class ApplicationEnvironment {
 
                                             Channel channel = key.channel();
 
-                                            LogService.i(LOG_TAG, "onWriteAvailable for ssl channel " + channel);
+                                            LogService.i(LOG_TAG, "onWriteAvailable for channel " + channel);
 
                                             if (channel instanceof WritableByteChannel) {
 
