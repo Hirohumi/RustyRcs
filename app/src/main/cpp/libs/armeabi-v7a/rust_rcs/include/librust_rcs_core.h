@@ -23,6 +23,7 @@ extern void librust_free_cstring(char *cstr);
 
 // log
 void platform_log_impl(const char *tag, const char *message);
+void platform_critical_log_impl(const char *tag, const char *message);
 
 // icc
 int platform_icc_open_channel(void *aid_bytes, size_t aid_size);

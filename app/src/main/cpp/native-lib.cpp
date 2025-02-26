@@ -1322,6 +1322,7 @@ Java_com_everfrost_rusty_rcs_client_RustyRcsClient_destroy(__attribute__((unused
 static volatile jobject host_environment = nullptr;
 
 static jmethodID debug_log_method_id = nullptr;
+static jmethodID critical_log_method_id = nullptr;
 
 static jmethodID network_request_factory_constructor_method_id = nullptr;
 
@@ -1381,6 +1382,7 @@ Java_com_everfrost_rusty_rcs_client_ApplicationEnvironment_registerHostEnvironme
     host_environment = env->NewGlobalRef(factory);
 
     debug_log_method_id = env->GetStaticMethodID(clazz, "debugLog", "(Ljava/lang/String;Ljava/lang/String;)V");
+    critical_log_method_id = env->GetStaticMethodID(clazz, "criticalLog", "(Ljava/lang/String;Ljava/lang/String;)V");
 
     network_request_factory_constructor_method_id = env->GetMethodID(clazz, "createNetworkRequest",
                                                                      "(J)Lcom/everfrost/rusty/rcs/client/ApplicationEnvironment$CellularNetworkRequest;");
@@ -1459,6 +1461,19 @@ void platform_log_impl(const char *tag, const char *message)
         jstring m = env->NewStringUTF(message);
 
         env->CallStaticVoidMethod(clazz, debug_log_method_id, t, m);
+    }
+}
+
+void platform_critical_log_impl(const char *tag, const char *message)
+{
+    JNIEnv *env = ensure_jni_env();
+    if (env) {
+        jclass clazz = env->GetObjectClass(host_environment);
+
+        jstring t = env->NewStringUTF(tag);
+        jstring m = env->NewStringUTF(message);
+
+        env->CallStaticVoidMethod(clazz, critical_log_method_id, t, m);
     }
 }
 

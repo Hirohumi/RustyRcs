@@ -183,7 +183,7 @@ public class ApplicationEnvironment {
                                                     LogService.i(LOG_TAG, "ops is now " + newOps);
                                                 }
 
-                                                if (haveData) {
+                                                if (haveData || closed) {
                                                     synchronized (asyncSocket.readLatches) {
                                                         Iterator<AsyncLatch> it = asyncSocket.readLatches.iterator();
                                                         while (it.hasNext()) {
@@ -410,6 +410,10 @@ public class ApplicationEnvironment {
 
     public static void debugLog(String tag, String msg) {
         LogService.d(tag, msg);
+    }
+
+    public static void criticalLog(String tag, String msg) {
+        LogService.w(tag, msg);
     }
 
     public static class CellularNetworkRequestListener {
