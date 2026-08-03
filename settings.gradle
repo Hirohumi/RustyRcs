@@ -1,8 +1,8 @@
 pluginManagement {
     repositories {
-        gradlePluginPortal()
         google()
         mavenCentral()
+        gradlePluginPortal()
         jcenter() {
             content {
                 includeModule("org.webrtc", "google-webrtc")
