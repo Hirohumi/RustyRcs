@@ -332,22 +332,26 @@ static void message_callback_impl(int service_type, struct rcs_messaging_session
             sessionHandle->session = session;
 
             jstring contactUri = env->NewStringUTF(contact_uri);
-
             jstring contentType = env->NewStringUTF(content_type);
-
             jstring contentBody = env->NewStringUTF(content_body);
-
             jstring messageId = env->NewStringUTF(imdn_message_id);
 
             jstring date = env->NewStringUTF(cpim_date);
-
             jstring from = nullptr;
-
             if (cpim_from != nullptr) {
                 from = env->NewStringUTF(cpim_from);
             }
 
             env->CallVoidMethod(callbackContext->obj, message_callback_method_id, service_type, reinterpret_cast<jlong>(sessionHandle), contactUri, contentType, contentBody, messageId, date, from);
+
+            env->DeleteLocalRef(contactUri);
+            env->DeleteLocalRef(contentType);
+            env->DeleteLocalRef(contentBody);
+            env->DeleteLocalRef(messageId);
+            env->DeleteLocalRef(date);
+            if (from != nullptr) {
+                env->DeleteLocalRef(from);
+            }
         }
     }
 }
@@ -392,6 +396,8 @@ static void multi_conference_v1_invite_handler_function_impl(struct rcs_multi_co
                 receiverHandle->receiver = response_receiver;
 
                 env->CallVoidMethod(callbackContext->obj, multi_conference_v1_invite_handler_method_id, reinterpret_cast<jlong>(conferenceV1Handle), offerSdp, reinterpret_cast<jlong>(receiverHandle));
+
+                env->DeleteLocalRef(offerSdp);
             }
         }
     }
@@ -417,7 +423,6 @@ static void auto_config_process_callback_impl(int status_code, void *context)
     if (callbackContext) {
         JNIEnv *env = ensure_jni_env();
         if (env) {
-
             env->CallVoidMethod(callbackContext->obj, auto_config_progress_callback_method_id, status_code);
         }
     }
@@ -436,6 +441,11 @@ static void auto_config_result_callback_impl(int status_code, const char *ims_co
             jstring extraString = env->NewStringUTF(extra);
 
             env->CallVoidMethod(callbackContext->obj, auto_config_result_callback_method_id, status_code, imsConfig, rcsConfig, extraString);
+
+            env->DeleteLocalRef(imsConfig);
+            env->DeleteLocalRef(rcsConfig);
+
+            env->DeleteLocalRef(extraString);
         }
     }
 }
@@ -463,6 +473,8 @@ static void message_result_callback_impl(uint16_t status_code, const char *reaso
             jstring reason_phrase_string = env->NewStringUTF(reason_phrase);
 
             env->CallVoidMethod(callbackContext->obj, message_result_callback_method_id, status_code, reason_phrase_string);
+
+            env->DeleteLocalRef(reason_phrase_string);
         }
     }
 }
@@ -490,6 +502,8 @@ static void send_imdn_report_result_callback_impl(uint16_t status_code, const ch
             jstring reason_phrase_string = env->NewStringUTF(reason_phrase);
 
             env->CallVoidMethod(callbackContext->obj, send_imdn_report_result_callback_method_id, status_code, reason_phrase_string);
+
+            env->DeleteLocalRef(reason_phrase_string);
         }
     }
 }
@@ -547,6 +561,11 @@ static void upload_file_result_callback_impl(uint16_t status_code, const char *r
             }
 
             env->CallVoidMethod(callbackContext->obj, upload_file_result_callback_method_id, status_code, reason_phrase_string, xmlString);
+
+            env->DeleteLocalRef(reason_phrase_string);
+            if (xmlString != nullptr) {
+                env->DeleteLocalRef(xmlString);
+            }
         }
     }
 }
@@ -599,6 +618,8 @@ static void download_file_result_callback_impl(uint16_t status_code, const char 
             jstring reason_phrase_string = env->NewStringUTF(reason_phrase);
 
             env->CallVoidMethod(callbackContext->obj, download_file_result_callback_method_id, status_code, reason_phrase_string);
+
+            env->DeleteLocalRef(reason_phrase_string);
         }
     }
 }
@@ -637,6 +658,8 @@ static void multi_conference_v1_event_listener_function_impl (uint16_t event_typ
                             env->CallVoidMethod(listenerContext->obj, multi_conference_v1_event_listener_on_user_joined_method_id, j_user_joined);
 
                             librust_free_cstring(user_joined);
+
+                            env->DeleteLocalRef(j_user_joined);
                         }
                     }
 
@@ -654,6 +677,8 @@ static void multi_conference_v1_event_listener_function_impl (uint16_t event_typ
                             env->CallVoidMethod(listenerContext->obj, multi_conference_v1_event_listener_on_user_left_method_id, j_user_left);
 
                             librust_free_cstring(user_left);
+
+                            env->DeleteLocalRef(j_user_left);
                         }
                     }
 
@@ -706,6 +731,8 @@ static void multi_conference_v1_create_result_callback_impl(struct rcs_multi_con
                                     reinterpret_cast<const jbyte *>(sdp));
 
             env->CallVoidMethod(callbackContext->obj, create_multi_conference_v1_result_callback_method_id, reinterpret_cast<jlong>(nativeHandle), sdp_utf8);
+
+            env->DeleteLocalRef(sdp_utf8);
         }
     }
 }
@@ -749,6 +776,14 @@ static void retrieve_specific_chatbots_result_callback_impl(uint16_t status_code
             }
 
             env->CallVoidMethod(callbackContext->obj, retrieve_specific_chatbots_result_callback_method_id, status_code, reason_phrase_string, specific_chatbots_string, response_etag_string, static_cast<jint>(expiry));
+
+            env->DeleteLocalRef(reason_phrase_string);
+            if (specific_chatbots_string != nullptr) {
+                env->DeleteLocalRef(specific_chatbots_string);
+            }
+            if (response_etag_string != nullptr) {
+                env->DeleteLocalRef(response_etag_string);
+            }
         }
     }
 }
@@ -782,6 +817,11 @@ static void search_chatbot_result_callback_impl(uint16_t status_code,  const cha
             }
 
             env->CallVoidMethod(callbackContext->obj, search_chatbot_result_callback_method_id, status_code, reason_phrase_string, json);
+
+            env->DeleteLocalRef(reason_phrase_string);
+            if (json != nullptr) {
+                env->DeleteLocalRef(json);
+            }
         }
     }
 }
@@ -820,6 +860,14 @@ static void retrieve_chatbot_info_result_callback_impl(uint16_t status_code,cons
             }
 
             env->CallVoidMethod(callbackContext->obj, retrieve_chatbot_info_result_callback_method_id, status_code, reason_phrase_string, chatbot_info_string, response_etag_string, static_cast<jint>(expiry));
+
+            env->DeleteLocalRef(reason_phrase_string);
+            if (chatbot_info_string != nullptr) {
+                env->DeleteLocalRef(chatbot_info_string);
+            }
+            if (response_etag_string != nullptr) {
+                env->DeleteLocalRef(response_etag_string);
+            }
         }
     }
 }
@@ -1461,6 +1509,9 @@ void platform_log_impl(const char *tag, const char *message)
         jstring m = env->NewStringUTF(message);
 
         env->CallStaticVoidMethod(clazz, debug_log_method_id, t, m);
+
+        env->DeleteLocalRef(t);
+        env->DeleteLocalRef(m);
     }
 }
 
@@ -1474,6 +1525,9 @@ void platform_critical_log_impl(const char *tag, const char *message)
         jstring m = env->NewStringUTF(message);
 
         env->CallStaticVoidMethod(clazz, critical_log_method_id, t, m);
+
+        env->DeleteLocalRef(t);
+        env->DeleteLocalRef(m);
     }
 }
 
@@ -1491,7 +1545,6 @@ void platform_icc_close_channel(int channel)
 {
 
 }
-
 
 struct network_request {
     jobject obj;
@@ -1515,6 +1568,7 @@ struct network_request *platform_activate_cellular_network(void *context, activa
             auto request = static_cast<struct network_request *>(calloc(1, sizeof(struct network_request)));
             request->listener = listener;
             request->obj = env->NewGlobalRef(r);
+            env->DeleteLocalRef(r);
             return request;
         } else {
             free(listener);
@@ -1558,6 +1612,7 @@ struct network_info *platform_get_active_network_info() {
         if (r) {
             auto networkInfo = static_cast<struct network_info *>(calloc(1, sizeof (struct network_info)));
             networkInfo->obj = env->NewGlobalRef(r);
+            env->DeleteLocalRef(r);
             return networkInfo;
         }
     }
@@ -1585,6 +1640,7 @@ struct dns_info *platform_get_network_dns_info(struct network_info *c_handle) {
         if (r) {
             auto dnsInfo = static_cast<struct dns_info *>(calloc(1, sizeof (struct dns_info)));
             dnsInfo->obj = env->NewGlobalRef(r);
+            env->DeleteLocalRef(r);
             return dnsInfo;
         }
     }
@@ -1608,6 +1664,8 @@ const char *platform_get_dns_server(struct dns_info *c_handle) {
             memcpy(copied, address_string, address_length);
 
             env->ReleaseStringUTFChars(address, address_string);
+
+            env->DeleteLocalRef(r);
 
             return copied;
         }
@@ -1682,6 +1740,8 @@ struct platform_socket *platform_create_socket() {
 
             handle->obj = env->NewGlobalRef(r);
 
+            env->DeleteLocalRef(r);
+
             return handle;
         }
     }
@@ -1702,6 +1762,8 @@ int platform_socket_bind(struct platform_socket *sock, const char *l_addr, uint1
 
         __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, "setupTls() returns %d\n", r);
 
+        env->DeleteLocalRef(localAddress);
+
         return r;
     }
 
@@ -1721,6 +1783,8 @@ int platform_socket_configure_tls(struct platform_socket *sock, const char *host
 
         __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, "setupTls() returns %d\n", r);
 
+        env->DeleteLocalRef(hostName);
+
         return r;
     }
 
@@ -1736,7 +1800,11 @@ int platform_socket_connect(struct platform_socket *sock, const char *r_addr, u_
 
         jstring rAddr = env->NewStringUTF(r_addr);
 
-        return env->CallIntMethod(sock->obj, socket_connect_method_id, rAddr, r_port);
+        int r = env->CallIntMethod(sock->obj, socket_connect_method_id, rAddr, r_port);
+
+        env->DeleteLocalRef(rAddr);
+
+        return r;
     }
 
     return -1;
@@ -1834,9 +1902,12 @@ int platform_read_socket(struct platform_socket *sock, struct rust_async_waker *
 
         if (ret > 0) {
             env->GetByteArrayRegion(jBuffer, 0, ret, reinterpret_cast<jbyte *>(buffer));
+            env->DeleteLocalRef(jBuffer);
             *bytes_read = ret;
             return 0;
         }
+
+        env->DeleteLocalRef(jBuffer);
 
         if (ret == 0) {
             return EAGAIN;
@@ -1874,6 +1945,8 @@ int platform_write_socket(struct platform_socket *sock, struct rust_async_waker 
         env->SetByteArrayRegion(bytes, 0, buffer_len, reinterpret_cast<const jbyte *>(buffer));
 
         int r = env->CallIntMethod(sock->obj, write_socket_method_id, bytes, handle);
+
+        env->DeleteLocalRef(bytes);
 
         if (r > 0) {
             *bytes_written = r;
@@ -1954,6 +2027,7 @@ struct platform_socket_info *platform_get_socket_info(struct platform_socket *so
         if (r) {
             auto socketInfo = static_cast<struct platform_socket_info *>(calloc(1, sizeof (struct platform_socket_info)));
             socketInfo->obj = env->NewGlobalRef(r);
+            env->DeleteLocalRef(r);
             return socketInfo;
         }
     }
@@ -1987,6 +2061,8 @@ const char *platform_get_socket_l_addr(struct platform_socket_info *sock_info) {
             memcpy(copied, address_string, address_length);
 
             env->ReleaseStringUTFChars(lAddrString, address_string);
+
+            env->DeleteLocalRef(lAddr);
 
             return copied;
         }
@@ -2025,6 +2101,7 @@ struct platform_cipher_suite *platform_get_socket_session_cipher_suite(struct pl
         if (r) {
             auto socketInfo = static_cast<struct platform_cipher_suite *>(calloc(1, sizeof (struct platform_cipher_suite)));
             socketInfo->obj = env->NewGlobalRef(r);
+            env->DeleteLocalRef(r);
             return socketInfo;
         }
     }
@@ -2074,6 +2151,8 @@ void *platform_perform_aka(int subscription_id, void *in_data, size_t in_size, s
                                                       getIccAuthentication_method_id,
                                                       data, subscription_id);
 
+        env->DeleteLocalRef(data);
+
         if (ret) {
 
             jsize size = env->GetArrayLength(ret);
@@ -2085,6 +2164,8 @@ void *platform_perform_aka(int subscription_id, void *in_data, size_t in_size, s
                 env->GetByteArrayRegion(ret, 0, size, ret_data);
 
                 *out_size = size;
+
+                env->DeleteLocalRef(ret);
 
                 return ret_data;
             }
